@@ -1,19 +1,16 @@
 import streamlit as st
 import spacy
-import os
-import json
-import re
-from deep_translator import GoogleTranslator
+import numpy as np  # 虽然不直接用，但引入它可以帮助确认环境
 
-# --- 1. 极其简化的模型加载 ---
 @st.cache_resource
 def load_nlp():
-    # 因为已经在 requirements.txt 里安装了那个 .whl 文件
-    # 它现在就像一个普通的 python 包一样存在于环境中
+    # requirements.txt 已经安装了模型包，这里直接加载
     return spacy.load("de_core_news_sm")
 
-# 这里如果报错，说明 requirements.txt 里的链接没下载成功
-nlp = load_nlp()
+try:
+    nlp = load_nlp()
+except Exception as e:
+    st.error(f"模型加载失败: {e}")
 
 
 
