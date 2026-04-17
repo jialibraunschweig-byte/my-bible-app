@@ -1,29 +1,18 @@
 import streamlit as st
 import json
 import os
-import spacy
+import re
 from deep_translator import GoogleTranslator
 
-
-# --- 1. 模型加载 (针对 Streamlit 优化) ---
-@st.cache_resource
-def load_nlp():
-    try:
-        return spacy.load("de_core_news_sm")
-    except:
-        os.system("python -m spacy download de_core_news_sm")
-        return spacy.load("de_core_news_sm")
-
-
-nlp = load_nlp()
-
 # 页面配置
-st.set_page_config(page_title="德语动词解析", layout="centered")
+st.set_page_config(page_title="德中圣经学习", layout="centered")
 
 
 class BibleWebApp:
-    def __init__(self, dict_path="my_dict.json"):
+    def __init__(self, dict_path="my_dict.json", note_path="bible_notes.md"):
         self.dict_path = dict_path
+        self.note_path = note_path
+        # 初始化词典
         if not os.path.exists(self.dict_path):
             with open(self.dict_path, "w", encoding="utf-8") as f:
                 json.dump({}, f)
@@ -37,61 +26,57 @@ class BibleWebApp:
         with open(self.dict_path, "w", encoding="utf-8") as f:
             json.dump(self.my_dict, f, ensure_ascii=False, indent=4)
 
+    def clean_word(self, word):
+        return re.sub(r'[^\w\s]', '', word)
 
+
+# 初始化应用
 app = BibleWebApp()
 
-st.title("📖 德语经文：动词精简解析")
-st.caption("自动提取动词原型并翻译，去除冗余信息")
+st.title("📖 德中圣经逐词解析")
+st.caption("粘贴德语经文，自动生成逐词对照表")
 
-sentence = st.text_area("请粘贴德语经文:", placeholder="输入德语文本...")
+# 输入框
+sentence = st.text_area("请粘贴德语经文:", placeholder="例如：Denn Gott hat die Welt so sehr geliebt...")
 
-if st.button("开始提取"):
+if st.button("开始解析"):
     if sentence:
-        with st.spinner('解析中...'):
+        with st.spinner('正在翻译解析中...'):
             # 1. 全句翻译
             full_trans = app.translator.translate(sentence)
-            st.success(f"**全句意译：** {full_trans}")
+            st.success(f"**全句翻译：** {full_trans}")
 
-            # 2. NLP 动词提取
-            doc = nlp(sentence)
+            # 2. 逐词解析
+            words = sentence.split()
             table_data = []
 
-            for token in doc:
-                # 仅筛选动词和助动词
-                if token.pos_ in ["VERB", "AUX"]:
-                    lemma = token.lemma_
+            for raw_word in words:
+                word = app.clean_word(raw_word)
+                if not word: continue
 
-                    # 查词典或在线翻译
-                    if lemma in app.my_dict:
-                        trans = app.my_dict[lemma]
-                    else:
-                        try:
-                            trans = app.translator.translate(lemma)
-                            app.my_dict[lemma] = trans
-                        except:
-                            trans = "超时"
+                word_key = word.lower()
+                if word_key in app.my_dict:
+                    trans = app.my_dict[word_key]
+                else:
+                    try:
+                        trans = app.translator.translate(word)
+                        app.my_dict[word_key] = trans
+                    except:
+                        trans = "超时"
 
-                    # 核心修改：只保留三列
-                    table_data.append({
-                        "经文动词": token.text,
-                        "动词原形": lemma,
-                        "对应汉语": trans
-                    })
+                table_data.append({"原词": raw_word, "对应汉语": trans, "备注": "自动翻译"})
 
-            # 3. 显示精简表格
-            if table_data:
-                st.subheader("🔍 动词对照表")
-                st.table(table_data)
+            # 3. 显示表格
+            st.table(table_data)
 
-                app.save_dict()
+            # 保存词典
+            app.save_dict()
 
-                # 4. 导出笔记 (Markdown 格式)
-                note_text = f"### 德语动词学习笔记\n**原文:** {sentence}\n\n| 经文动词 | 动词原形 | 对应汉语 |\n|---|---|---|\n"
-                for row in table_data:
-                    note_text += f"| {row['经文动词']} | {row['动词原形']} | {row['对应汉语']} |\n"
+            # 4. 导出笔记功能
+            note_text = f"### 经文解析\n**DE:** {sentence}\n**CN:** {full_trans}\n\n| 原词 | 翻译 | 备注 |\n|---|---|---|\n"
+            for row in table_data:
+                note_text += f"| {row['原词']} | {row['对应汉语']} | - |\n"
 
-                st.download_button("下载 Markdown 笔记", note_text, file_name="verbs_study.md")
-            else:
-                st.info("未发现动词。")
+            st.download_button("下载本次笔记 (.md)", note_text, file_name="bible_note.md")
     else:
-        st.warning("内容不能为空。")
+        st.warning("请先粘贴经文内容。")
