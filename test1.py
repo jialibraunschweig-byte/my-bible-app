@@ -1,119 +1,120 @@
+import streamlit as st
 import spacy
-import json
 import os
+import json
 import re
 from deep_translator import GoogleTranslator
 
-# 1. 自动检查并加载模型
-try:
-    nlp = spacy.load("de_core_news_sm")
-except:
-    import os
-    print("[系统提示] 正在初始化德语语法引擎...")
-    os.system("python -m spacy download de_core_news_sm")
-    nlp = spacy.load("de_core_news_sm")
+# --- 1. 网页版专用的模型加载方式 (带缓存) ---
+@st.cache_resource
+def load_nlp():
+    try:
+        # 尝试加载模型
+        return spacy.load("de_core_news_sm")
+    except:
+        # 如果没有，则下载并加载
+        os.system("python -m spacy download de_core_news_sm")
+        return spacy.load("de_core_news_sm")
 
+nlp = load_nlp()
 
-class BibleLearningApp:
-    def __init__(self, dict_path="my_dict.json", note_path="bible_notes.md"):
-        self.dict_path = dict_path
-        self.note_path = note_path
-        self.my_dict = self.load_dict()
-        self.translator = GoogleTranslator(source='de', target='zh-CN')
+# --- 2. 初始化词典 ---
+# 注意：在 Streamlit Cloud 上，文件保存是临时的，重启后会重置
+dict_path = "my_dict.json"
+if not os.path.exists(dict_path):
+    with open(dict_path, "w", encoding="utf-8") as f:
+        json.dump({}, f)
 
-    def load_dict(self):
-        if os.path.exists(self.dict_path):
-            with open(self.dict_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+def load_dict():
+    with open(dict_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    def save_dict(self):
-        with open(self.dict_path, "w", encoding="utf-8") as f:
-            json.dump(self.my_dict, f, ensure_ascii=False, indent=4)
+def save_dict(data):
+    with open(dict_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def save_note(self, content):
-        with open(self.note_path, "a", encoding="utf-8") as f:
-            f.write(content + "\n\n---\n\n")
+my_dict = load_dict()
+translator = GoogleTranslator(source='de', target='zh-CN')
 
-    def run(self):
-        print("\n" + "=" * 60)
-        print("   德中圣经逐词解析程序 (括号自动清理版)")
-        print("=" * 60)
-        print("输入 'q' 退出。")
+# --- 3. 网页界面布局 ---
+st.set_page_config(page_title="德中圣经逐词解析", layout="centered")
+st.title("📖 德中圣经逐词解析")
+st.caption("支持自动过滤 HFA 索引及清理括号内容")
 
-        while True:
-            ref = input("\n请输入经文索引 (如 Prediger 10:4): ")
-            if ref.lower() == 'q': break
+# 输入区域
+raw_input = st.text_area("请粘贴德语原文内容:", height=200, placeholder="例如: Prediger 12:13 HFA 13 Zu guter Letzt...")
 
-            raw_sentence = input("请粘贴德语原文: ").strip()
-            if raw_sentence.lower() == 'q': break
-            if not raw_sentence: continue
+if st.button("开始解析"):
+    if raw_input.strip():
+        # --- A. 核心过滤逻辑：HFA 数字后截断 ---
+        sentence = raw_input
+        if "HFA" in raw_input:
+            parts = raw_input.split("HFA", 1)
+            after_hfa = parts[1]
+            digit_match = re.search(r'\d+', after_hfa)
+            if digit_match:
+                sentence = after_hfa[digit_match.end():].strip()
+            else:
+                sentence = after_hfa.strip()
 
-            # --- 核心修改：删除括号及其内部的内容 ---
-            # 这里的正则表达式会删除 () 和 [] 及其包含的所有内容
-            sentence = re.sub(r'\(.*?\)|\[.*?\]', '', raw_sentence)
-            # 顺便清理一下可能出现的双空格
-            sentence = re.sub(r'\s+', ' ', sentence).strip()
+        # --- B. 核心过滤逻辑：删除括号内容 ---
+        # 删除 () 和 [] 及其内部内容
+        sentence = re.sub(r'\(.*?\)|\[.*?\]', '', sentence)
+        sentence = re.sub(r'\s+', ' ', sentence).strip()
 
-            doc = nlp(sentence)
+        if not sentence:
+            st.error("❌ 过滤后未识别到有效德语正文，请检查输入。")
+        else:
+            with st.spinner('正在解析并翻译中，请稍候...'):
+                # 1. 全句翻译
+                try:
+                    full_trans = translator.translate(sentence)
+                except:
+                    full_trans = "[翻译超时]"
 
-            # 1. 全句翻译
-            try:
-                full_translation = self.translator.translate(sentence)
-            except:
-                full_translation = "[全句翻译失败]"
+                st.subheader("🌟 全句翻译")
+                st.success(full_trans)
 
-            # 2. 构建笔记内容
-            note_content = (
-                f"### {ref}\n"
-                f"**DE (已清理括号):** {sentence}\n"
-                f"**CN:** {full_translation}\n\n"
-                f"| 德语原词 | 对应汉语 | 德语原型 |\n"
-                f"| :--- | :--- | :--- |\n"
-            )
+                # 2. 逐词解析
+                doc = nlp(sentence)
+                table_data = []
 
-            # 3. 逐词解析并打印
-            print(f"\n[解析结果 - {ref}]")
-            print(f"原始输入: {raw_sentence}")
-            print(f"清理后经文: {sentence}")
-            print(f"整句翻译: {full_translation}\n")
+                for token in doc:
+                    if token.is_punct or token.is_space:
+                        continue
+                    
+                    lemma = token.lemma_
+                    pos = token.pos_
 
-            # 终端表头
-            print(f"{'德语原词':<18} | {'对应汉语':<18} | {'德语原型'}")
-            print("-" * 75)
+                    # 查词或在线翻译
+                    if lemma in my_dict:
+                        trans = my_dict[lemma]
+                    else:
+                        try:
+                            trans = translator.translate(lemma)
+                            my_dict[lemma] = trans
+                        except:
+                            trans = "[超时]"
+                    
+                    proto_info = f"{lemma} ({pos})"
+                    table_data.append({
+                        "德语原词": token.text,
+                        "对应汉语": trans,
+                        "德语原型": proto_info
+                    })
 
-            for token in doc:
-                if token.is_punct or token.is_space: continue
+                # 3. 显示结果表格
+                st.subheader("📝 逐词对照表")
+                st.table(table_data)
 
-                lemma = token.lemma_
-                pos = token.pos_
+                # 保存词典更新
+                save_dict(my_dict)
 
-                # 获取词典翻译
-                if lemma in self.my_dict:
-                    trans = self.my_dict[lemma]
-                else:
-                    try:
-                        trans = self.translator.translate(lemma)
-                        self.my_dict[lemma] = trans
-                    except:
-                        trans = "[超时]"
-
-                # 构造德语原型信息
-                proto_info = f"{lemma} ({pos})"
-
-                # 终端打印
-                print(f"{token.text:<18} | {trans:<18} | {proto_info}")
-
-                # 写入笔记内容
-                row = f"| {token.text} | {trans} | {proto_info} |"
-                note_content += row + "\n"
-
-            # 4. 保存
-            self.save_dict()
-            self.save_note(note_content)
-            print(f"\n[OK] 解析已保存至 {self.note_path}")
-
-
-if __name__ == "__main__":
-    app = BibleLearningApp()
-    app.run()
+                # 4. 提供 Markdown 笔记下载
+                note_text = f"### 经文解析\n**原文:** {sentence}\n**翻译:** {full_trans}\n\n| 原词 | 翻译 | 原型 |\n|---|---|---|\n"
+                for row in table_data:
+                    note_text += f"| {row['德语原词']} | {row['对应汉语']} | {row['德语原型']} |\n"
+                
+                st.download_button("📥 下载解析笔记 (.md)", note_text, file_name="bible_note.md")
+    else:
+        st.warning("⚠️ 请先粘贴经文内容。")
