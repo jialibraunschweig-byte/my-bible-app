@@ -21,7 +21,7 @@ def get_nlp(lang_code):
             return spacy.load("de_core_news_sm")
 
 # 页面配置
-st.set_page_config(page_title="经文精准解析助手", layout="centered")
+st.set_page_config(page_title="经文翻译助手", layout="centered")
 
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
@@ -41,7 +41,7 @@ app = BibleWebApp()
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 经文精准解析助手")
+st.title("📖 经文翻译助手")
 st.caption("修复版：支持英/德语自动识别与词性精准提取")
 
 # --- 语言选择 ---
