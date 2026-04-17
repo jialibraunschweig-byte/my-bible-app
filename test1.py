@@ -1,18 +1,21 @@
 import streamlit as st
 import spacy
 import os
+import json
+import re
+from deep_translator import GoogleTranslator
 
+# --- 1. 极其简化的模型加载 ---
 @st.cache_resource
 def load_nlp():
-    try:
-        # 尝试加载
-        return spacy.load("de_core_news_sm")
-    except OSError:
-        # 如果找不到，现场下载
-        os.system("python -m spacy download de_core_news_sm")
-        return spacy.load("de_core_news_sm")
+    # 因为已经在 requirements.txt 里安装了那个 .whl 文件
+    # 它现在就像一个普通的 python 包一样存在于环境中
+    return spacy.load("de_core_news_sm")
 
+# 这里如果报错，说明 requirements.txt 里的链接没下载成功
 nlp = load_nlp()
+
+
 
 # --- 2. 词典管理 (Streamlit 环境) ---
 dict_path = "my_dict.json"
