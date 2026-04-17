@@ -1,19 +1,11 @@
 import streamlit as st
-import json
-import os
 import spacy
-from deep_translator import GoogleTranslator
 
-# --- 1. 模型加载 (针对 Streamlit 优化) ---
+# 只要 requirements.txt 里写了那个长链接，
+# 这里就百分之百可以直接加载成功。
 @st.cache_resource
 def load_nlp():
-    try:
-        # 尝试加载模型
-        return spacy.load("de_core_news_sm")
-    except:
-        # 如果不存在则下载（备用逻辑）
-        os.system("python -m spacy download de_core_news_sm")
-        return spacy.load("de_core_news_sm")
+    return spacy.load("de_core_news_sm")
 
 nlp = load_nlp()
 
