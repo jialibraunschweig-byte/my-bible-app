@@ -4,13 +4,11 @@ import os
 import spacy
 from deep_translator import GoogleTranslator
 
-# --- 1. 模型加载 (针对 Streamlit 优化) ---
+# --- 1. 模型加载 ---
 @st.cache_resource
 def load_nlp():
-    # 只要 requirements.txt 里写了那个 .whl 链接，这里直接加载即可
     return spacy.load("de_core_news_sm")
 
-# 初始化 NLP 模型
 nlp = load_nlp()
 
 # 页面配置
@@ -19,33 +17,44 @@ st.set_page_config(page_title="德语动词解析助手", layout="centered")
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
         self.dict_path = dict_path
-        # 初始化词典文件，如果不存在则创建一个空的
         if not os.path.exists(self.dict_path):
             with open(self.dict_path, "w", encoding="utf-8") as f:
                 json.dump({}, f)
 
-        # 读取本地词典缓存
         with open(self.dict_path, "r", encoding="utf-8") as f:
             self.my_dict = json.load(f)
 
-        # 初始化翻译引擎
         self.translator = GoogleTranslator(source='de', target='zh-CN')
 
     def save_dict(self):
-        # 将更新后的词典存入 JSON 文件
         with open(self.dict_path, "w", encoding="utf-8") as f:
             json.dump(self.my_dict, f, ensure_ascii=False, indent=4)
 
-# --- 2. 初始化应用实例 ---
 app = BibleWebApp()
 
+# --- 2. 清空输入框的逻辑 ---
+def clear_text():
+    st.session_state["input_sentence"] = ""
+
 st.title("📖 德语经文：动词精简解析")
-st.caption("自动提取动词原形并翻译，生成的笔记可直接用于学习")
+st.caption("自动提取动词原形并翻译，支持一键清空")
 
-# 输入框
-sentence = st.text_area("请粘贴德语经文:", placeholder="例如：Denn Gott hat die Welt so sehr geliebt...")
+# --- 3. 输入框 (绑定 session_state) ---
+sentence = st.text_area(
+    "请粘贴德语经文:", 
+    placeholder="例如：Denn Gott hat die Welt so sehr geliebt...",
+    key="input_sentence"  # 必须设置 key 才能手动修改
+)
 
-if st.button("开始提取动词"):
+# 按钮布局：解析按钮和删除按钮并排
+col1, col2 = st.columns([1, 5])
+with col1:
+    parse_btn = st.button("开始提取")
+with col2:
+    # 点击此按钮会触发 clear_text 函数
+    st.button("清除内容", on_click=clear_text)
+
+if parse_btn:
     if sentence:
         with st.spinner('正在分析语法并翻译...'):
             # 1. 全句意译
@@ -57,22 +66,18 @@ if st.button("开始提取动词"):
             table_data = []
 
             for token in doc:
-                # 核心筛选：只保留动词 (VERB) 和 助动词 (AUX)
                 if token.pos_ in ["VERB", "AUX"]:
-                    lemma = token.lemma_  # 获取动词原形
+                    lemma = token.lemma_
                     
-                    # 优先查本地词典，没有再调翻译接口
                     if lemma in app.my_dict:
                         trans = app.my_dict[lemma]
                     else:
                         try:
-                            # 翻译动词原形（学习动词最有效的方法）
                             trans = app.translator.translate(lemma)
                             app.my_dict[lemma] = trans
                         except:
                             trans = "超时"
 
-                    # 构建精简表格：只包含三列
                     table_data.append({
                         "经文动词": token.text,
                         "动词原形": lemma,
@@ -83,11 +88,9 @@ if st.button("开始提取动词"):
             if table_data:
                 st.subheader("🔍 动词对照表")
                 st.table(table_data)
-                
-                # 更新本地词典
                 app.save_dict()
 
-                # 4. 生成 Markdown 笔记
+                # 4. 生成笔记
                 note_text = f"### 德语学习笔记\n**原文:** {sentence}\n**意译:** {full_trans}\n\n| 经文动词 | 动词原形 | 对应汉语 |\n|---|---|---|\n"
                 for row in table_data:
                     note_text += f"| {row['经文动词']} | {row['动词原形']} | {row['对应汉语']} |\n"
