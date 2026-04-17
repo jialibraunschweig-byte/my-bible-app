@@ -32,36 +32,41 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 清空输入框的逻辑 ---
+# 清空输入框的逻辑
 def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 德语经文：动词精简解析")
-st.caption("自动提取动词原形并翻译，支持一键清空")
+st.caption("自动提取动词原形并翻译，支持原文显示与一键清空")
 
-# --- 3. 输入框 (绑定 session_state) ---
+# --- 输入框 ---
 sentence = st.text_area(
     "请粘贴德语经文:", 
     placeholder="例如：Denn Gott hat die Welt so sehr geliebt...",
-    key="input_sentence"  # 必须设置 key 才能手动修改
+    key="input_sentence",
+    height=150
 )
 
-# 按钮布局：解析按钮和删除按钮并排
+# 按钮布局
 col1, col2 = st.columns([1, 5])
 with col1:
     parse_btn = st.button("开始提取")
 with col2:
-    # 点击此按钮会触发 clear_text 函数
     st.button("清除内容", on_click=clear_text)
 
 if parse_btn:
     if sentence:
         with st.spinner('正在分析语法并翻译...'):
-            # 1. 全句意译
+            # 1. 完整显示原文 (新增部分)
+            st.markdown("---")
+            st.subheader("📝 输入原文")
+            st.info(sentence)
+
+            # 2. 全句意译
             full_trans = app.translator.translate(sentence)
             st.success(f"**全句意译：** {full_trans}")
 
-            # 2. NLP 动词提取
+            # 3. NLP 动词提取
             doc = nlp(sentence)
             table_data = []
 
@@ -84,13 +89,13 @@ if parse_btn:
                         "对应汉语": trans
                     })
 
-            # 3. 显示结果
+            # 4. 显示动词表格
             if table_data:
                 st.subheader("🔍 动词对照表")
                 st.table(table_data)
                 app.save_dict()
 
-                # 4. 生成笔记
+                # 5. 生成笔记
                 note_text = f"### 德语学习笔记\n**原文:** {sentence}\n**意译:** {full_trans}\n\n| 经文动词 | 动词原形 | 对应汉语 |\n|---|---|---|\n"
                 for row in table_data:
                     note_text += f"| {row['经文动词']} | {row['动词原形']} | {row['对应汉语']} |\n"
