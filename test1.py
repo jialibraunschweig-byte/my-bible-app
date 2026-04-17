@@ -1,15 +1,16 @@
 import streamlit as st
 import spacy
 import os
-import json
-import re
-from deep_translator import GoogleTranslator
 
-# --- 1. 模型加载 (适配 requirements.txt 预装方式) ---
 @st.cache_resource
 def load_nlp():
-    # 此时假设 requirements.txt 已经通过链接安装了 de_core_news_sm
-    return spacy.load("de_core_news_sm")
+    try:
+        # 尝试加载
+        return spacy.load("de_core_news_sm")
+    except OSError:
+        # 如果找不到，现场下载
+        os.system("python -m spacy download de_core_news_sm")
+        return spacy.load("de_core_news_sm")
 
 nlp = load_nlp()
 
