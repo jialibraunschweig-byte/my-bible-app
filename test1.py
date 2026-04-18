@@ -36,7 +36,7 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文翻译助手")
-st.caption("精准版：修复了 lang 等非前缀词被误粘合的问题")
+st.caption("精准版：修复了 mit 等介词被误粘合到动词上的问题")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -51,16 +51,17 @@ with col2:
     st.button("清除内容", on_click=clear_text)
 
 # --- 德语常见分离前缀白名单 ---
+# 移除了容易产生误判的简单介词，除非它们确实有分离前缀的语法标记
 GERMAN_PREFIXES = {
-    "ab", "an", "auf", "aus", "bei", "bei", "ein", "empor", "entgegen", 
+    "ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", 
     "fest", "fort", "her", "herauf", "heraus", "herein", "hin", "hinauf", 
-    "hinaus", "hinein", "los", "mit", "nach", "nieder", "vor", "voran", 
+    "hinaus", "hinein", "los", "nach", "nieder", "vor", "voran", 
     "voraus", "vorbei", "weg", "weiter", "zu", "zurück", "zusammen"
 }
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在执行精准语法重组...'):
+        with st.spinner('正在分析语法...'):
             nlp = get_nlp(source_code)
             doc = nlp(sentence)
             
@@ -76,9 +77,9 @@ if parse_btn:
             particles_map = {} 
             if source_code == "de":
                 for token in doc:
-                    # 只有在白名单里的词才被视为分离前缀进行粘合
-                    is_prefix = token.text.lower() in GERMAN_PREFIXES
-                    if (token.dep_ == "svp" or (token.pos_ in ["ADP", "ADV"] and token.head.pos_ == "VERB")) and is_prefix:
+                    # 核心修改：只有被标记为 svp (分离前缀) 且在白名单中的词才会被粘合
+                    # 像 "mit Wein" 里的 mit，其 dep_ 通常是 'case' 而不是 'svp'
+                    if token.dep_ == "svp" and token.text.lower() in GERMAN_PREFIXES:
                         verb_idx = token.head.i
                         if verb_idx not in particles_map:
                             particles_map[verb_idx] = []
@@ -91,18 +92,19 @@ if parse_btn:
                     continue
                 
                 if token.pos_ in ["VERB", "AUX", "ADJ", "ADV"]:
+                    # 对于 aufzuheitern，lemma_ 已经是 aufheitern，不需要额外粘合
                     lemma = token.lemma_
                     original_text = token.text
 
-                    # 强力粘合逻辑（仅针对白名单前缀）
+                    # 只有在特定的分离前缀情况下才手动粘合（比如 wiesen ... ab）
                     if source_code == "de" and token.i in particles_map:
                         prefixes = [p[0] for p in particles_map[token.i]]
-                        # 组合成正确的动词原形，如 ab + plagen = abplagen
-                        combined_lemma = "".join(prefixes) + lemma
-                        lemma = combined_lemma
+                        # 检查 lemma 是否已经包含了前缀 (避免重复粘合)
+                        if not any(lemma.startswith(p) for p in prefixes):
+                            lemma = "".join(prefixes) + lemma
                         original_text = f"{token.text} ... {' '.join(prefixes)}"
 
-                    cache_key = f"{source_code}_{lemma}_v3" 
+                    cache_key = f"{source_code}_{lemma}_v4" 
                     if cache_key in app.my_dict:
                         trans_info = app.my_dict[cache_key]
                     else:
@@ -120,6 +122,7 @@ if parse_btn:
                     if token.pos_ in ["VERB", "AUX"]:
                         verb_data.append({"经文动词": original_text, **row_data})
                     elif token.pos_ in ["ADJ", "ADV"]:
+                        # 确保像 mit 这样的介词不会跑进形容词表
                         adj_adv_data.append({"经文原词": token.text, "词类": "形容词" if token.pos_ == "ADJ" else "副词", **row_data})
 
             if verb_data:
