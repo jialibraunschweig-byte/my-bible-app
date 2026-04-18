@@ -4,7 +4,7 @@ import os
 import spacy
 from deep_translator import GoogleTranslator
 
-# --- 1. 核心模型加载 ---
+# --- 1. 模型加载 ---
 @st.cache_resource
 def get_nlp(lang_code):
     model_name = "en_core_web_sm" if lang_code == "en" else "de_core_news_sm"
@@ -36,19 +36,13 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文翻译助手")
-st.caption("增强版：深度处理德语分离动词（解决 wiesen ... ab 等识别问题）")
+st.caption("终极增强版：解决德语分离动词（如 wiesen ... ab）的强力粘合解析")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 
-# --- 输入框 ---
-sentence = st.text_area(
-    "请粘贴经文内容:", 
-    placeholder="例如：Er kam in seine Welt, aber die Menschen wiesen ihn ab.",
-    key="input_sentence",
-    height=150
-)
+sentence = st.text_area("请粘贴经文内容:", key="input_sentence", height=150)
 
 col1, col2 = st.columns([1, 5])
 with col1:
@@ -58,51 +52,54 @@ with col2:
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在分析复杂语法结构...'):
+        with st.spinner('正在执行深度语法重组...'):
             nlp = get_nlp(source_code)
+            doc = nlp(sentence)
             
-            # 1. 界面回显
-            st.markdown("---")
-            st.subheader("📝 输入原文")
-            st.info(sentence)
-
-            # 2. 翻译器初始化
+            # 初始化翻译器
             translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
             translator_en = GoogleTranslator(source='de', target='en') if source_code == "de" else None
             
             full_zh = translator_zh.translate(sentence)
             st.success(f"**中文意译：** {full_zh}")
 
-            # 3. NLP 深度解析
-            doc = nlp(sentence)
             verb_data = []
             adj_adv_data = []
             
-            # 记录已经被合并的前缀，防止它们单独出现在形容词/副词表里
-            particles_to_ignore = []
+            # --- 核心改进：手动寻找分离前缀 ---
+            particles_map = {} # 格式: {动词索引: [前缀文本, 前缀索引]}
+            
             if source_code == "de":
                 for token in doc:
-                    # 识别所有指向动词的分离前缀 (svp) 或 补足成分 (compound/prt)
-                    if token.dep_ in ["svp", "compound:prt"] or (token.pos_ == "ADP" and token.head.pos_ == "VERB"):
-                        particles_to_ignore.append(token.i)
+                    # 寻找分离前缀：1. 语法标注为 svp 的； 2. 位于末尾指向动词的副词或介词
+                    if token.dep_ == "svp" or (token.pos_ in ["ADP", "ADV"] and token.head.pos_ == "VERB"):
+                        verb_idx = token.head.i
+                        if verb_idx not in particles_map:
+                            particles_map[verb_idx] = []
+                        particles_map[verb_idx].append((token.text.lower(), token.i))
+
+            used_particle_indices = [idx for p_list in particles_map.values() for text, idx in p_list]
 
             for token in doc:
-                # 排除标点、空格和已被合并的前缀
-                if token.is_punct or token.is_space or token.i in particles_to_ignore:
+                if token.is_punct or token.is_space or token.i in used_particle_indices:
                     continue
                 
-                # 核心过滤：动词、助动词、形容词、副词
                 if token.pos_ in ["VERB", "AUX", "ADJ", "ADV"]:
-                    # spaCy 的 lemma_ 在德语中通常能自动处理分离动词
-                    # 比如 wiesen 会被还原为 abweisen，前提是 ab 标记正确
                     lemma = token.lemma_
-                    
-                    # 容错处理：如果 lemma 依然只是 "weisen"，但我们发现它有前缀被忽略了
-                    # 这里不需要手动拼接，spaCy 模型如果版本正确通常能自动完成。
-                    # 我们重点确保“ab”不重复出现在其他表里即可。
+                    original_text = token.text
+
+                    # --- 强力粘合逻辑 ---
+                    if source_code == "de" and token.i in particles_map:
+                        # 拿到所有属于该动词的前缀
+                        prefixes = [p[0] for p in particles_map[token.i]]
+                        # 将前缀拼在原形前面，例如 ab + weisen = abweisen
+                        # 我们按照词序最后出现的通常是前缀，将其拼在 lemma 最前面
+                        combined_lemma = "".join(prefixes) + lemma
+                        lemma = combined_lemma
+                        original_text = f"{token.text} ... {' '.join(prefixes)}"
 
                     # 缓存与翻译
-                    cache_key = f"{source_code}_{lemma}_trans"
+                    cache_key = f"{source_code}_{lemma}_v2" # 更新缓存版本
                     if cache_key in app.my_dict:
                         trans_info = app.my_dict[cache_key]
                     else:
@@ -114,23 +111,16 @@ if parse_btn:
                         except:
                             trans_info = {"zh": "超时", "en": "超时"}
 
-                    # 构建数据
                     row_data = {"词原形": lemma, "中文意思": trans_info["zh"]}
                     if trans_info["en"]: row_data["英语解释"] = trans_info["en"]
 
                     if token.pos_ in ["VERB", "AUX"]:
-                        v_row = {"经文动词": token.text}
-                        v_row.update(row_data)
-                        verb_data.append(v_row)
+                        verb_data.append({"经文动词": original_text, **row_data})
                     elif token.pos_ in ["ADJ", "ADV"]:
-                        pos_label = "形容词" if token.pos_ == "ADJ" else "副词"
-                        a_row = {"经文原词": token.text, "词类": pos_label}
-                        a_row.update(row_data)
-                        adj_adv_data.append(a_row)
+                        adj_adv_data.append({"经文原词": token.text, "词类": "形容词" if token.pos_ == "ADJ" else "副词", **row_data})
 
-            # 4. 展示表格
             if verb_data:
-                st.subheader("🔍 动词对照表")
+                st.subheader("🔍 动词对照表 (已强力粘合分离动词)")
                 st.table(verb_data)
             if adj_adv_data:
                 st.subheader("🔍 形容词 & 副词对照表")
