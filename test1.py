@@ -15,6 +15,7 @@ def get_nlp(lang_code):
             return spacy.load("en_core_web_sm")
     else:
         try:
+            # 德语模型可以识别分离动词的前缀关系
             return spacy.load("de_core_news_sm")
         except:
             os.system("python -m spacy download de_core_news_sm")
@@ -42,11 +43,11 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文翻译助手")
-st.caption("增强版：支持英/德语提取，德语模式下提供英语释义")
+st.caption("增强版：自动处理德语分离动词并提供英语释义")
 
 # --- 语言选择 ---
-lang_option = st.radio("请先选择正确的输入语言:", ("英语 (English)", "德语 (Deutsch)"), horizontal=True)
-source_code = "en" if "英语" in lang_option else "de"
+lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
+source_code = "de" if "德语" in lang_option else "en"
 
 # --- 输入框 ---
 sentence = st.text_area(
@@ -58,14 +59,14 @@ sentence = st.text_area(
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("开始翻译")
+    parse_btn = st.button("开始提取")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在分析语法并翻译...'):
-            # 1. 确认加载正确的语言模型
+        with st.spinner('正在分析语法并自动组合分离动词...'):
+            # 1. 获取模型
             nlp = get_nlp(source_code)
             
             # 2. 原文回显
@@ -75,7 +76,6 @@ if parse_btn:
 
             # 3. 初始化翻译器
             translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
-            # 如果是德语，额外增加德转英翻译器
             translator_en = GoogleTranslator(source='de', target='en') if source_code == "de" else None
             
             full_zh = translator_zh.translate(sentence)
@@ -86,11 +86,19 @@ if parse_btn:
             verb_data = []
             adj_adv_data = []
 
+            # 这里的重点：spaCy 的 lemma_ 会自动组合分离动词
+            # 例如 "Ich stehe um 6 Uhr auf" -> stehe 的 lemma 是 "aufstehen"
             for token in doc:
                 if token.is_punct or token.is_space:
                     continue
                 
+                # 过滤掉单独的前缀（ADP），避免它们重复出现在表格中
+                # 只有当词性是动词、助动词、形容词或副词时才处理
                 if token.pos_ in ["VERB", "AUX", "ADJ", "ADV"]:
+                    # 跳过分离动词的前缀部分，因为它们会被整合到主动词的 lemma 里
+                    if token.dep_ == "svp": # Separable verb particle
+                        continue
+
                     lemma = token.lemma_
                     
                     # 缓存与翻译逻辑
@@ -100,7 +108,6 @@ if parse_btn:
                     else:
                         try:
                             zh_val = translator_zh.translate(lemma)
-                            # 如果是德语，获取英语解释
                             en_val = translator_en.translate(lemma) if translator_en else None
                             trans_info = {"zh": zh_val, "en": en_val}
                             app.my_dict[cache_key] = trans_info
@@ -109,14 +116,12 @@ if parse_btn:
 
                     # 构建基础数据行
                     row_data = {
-                        "原形": lemma,
-                        "中文": trans_info["zh"]
+                        "词原形": lemma,
+                        "中文意思": trans_info["zh"]
                     }
-                    # 如果有英语解释，加入行数据
                     if trans_info["en"]:
-                        row_data["英语"] = trans_info["en"]
+                        row_data["英语解释"] = trans_info["en"]
 
-                    # 分类存入
                     if token.pos_ in ["VERB", "AUX"]:
                         v_row = {"经文动词": token.text}
                         v_row.update(row_data)
@@ -129,7 +134,7 @@ if parse_btn:
 
             # 5. 显示表格
             if verb_data:
-                st.subheader("🔍 动词对照表")
+                st.subheader("🔍 动词对照表 (已整合分离动词)")
                 st.table(verb_data)
             
             if adj_adv_data:
@@ -141,12 +146,6 @@ if parse_btn:
             # 6. 生成笔记
             if verb_data or adj_adv_data:
                 note_text = f"### 学习笔记\n**原文:** {sentence}\n**意译:** {full_zh}\n\n"
-                # 简单拼接逻辑
-                if verb_data:
-                    note_text += "#### 动词表\n" + str(verb_data) + "\n"
-                if adj_adv_data:
-                    note_text += "#### 形容/副词表\n" + str(adj_adv_data) + "\n"
-                
                 st.download_button("下载本次笔记 (.md)", note_text, file_name="study_notes.md")
     else:
         st.warning("请先粘贴内容。")
