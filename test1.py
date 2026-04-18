@@ -36,7 +36,7 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文翻译助手")
-st.caption("终极增强版：解决德语分离动词（如 wiesen ... ab）的强力粘合解析")
+st.caption("精准版：修复了 lang 等非前缀词被误粘合的问题")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -50,13 +50,20 @@ with col1:
 with col2:
     st.button("清除内容", on_click=clear_text)
 
+# --- 德语常见分离前缀白名单 ---
+GERMAN_PREFIXES = {
+    "ab", "an", "auf", "aus", "bei", "bei", "ein", "empor", "entgegen", 
+    "fest", "fort", "her", "herauf", "heraus", "herein", "hin", "hinauf", 
+    "hinaus", "hinein", "los", "mit", "nach", "nieder", "vor", "voran", 
+    "voraus", "vorbei", "weg", "weiter", "zu", "zurück", "zusammen"
+}
+
 if parse_btn:
     if sentence:
-        with st.spinner('正在执行深度语法重组...'):
+        with st.spinner('正在执行精准语法重组...'):
             nlp = get_nlp(source_code)
             doc = nlp(sentence)
             
-            # 初始化翻译器
             translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
             translator_en = GoogleTranslator(source='de', target='en') if source_code == "de" else None
             
@@ -66,13 +73,12 @@ if parse_btn:
             verb_data = []
             adj_adv_data = []
             
-            # --- 核心改进：手动寻找分离前缀 ---
-            particles_map = {} # 格式: {动词索引: [前缀文本, 前缀索引]}
-            
+            particles_map = {} 
             if source_code == "de":
                 for token in doc:
-                    # 寻找分离前缀：1. 语法标注为 svp 的； 2. 位于末尾指向动词的副词或介词
-                    if token.dep_ == "svp" or (token.pos_ in ["ADP", "ADV"] and token.head.pos_ == "VERB"):
+                    # 只有在白名单里的词才被视为分离前缀进行粘合
+                    is_prefix = token.text.lower() in GERMAN_PREFIXES
+                    if (token.dep_ == "svp" or (token.pos_ in ["ADP", "ADV"] and token.head.pos_ == "VERB")) and is_prefix:
                         verb_idx = token.head.i
                         if verb_idx not in particles_map:
                             particles_map[verb_idx] = []
@@ -88,18 +94,15 @@ if parse_btn:
                     lemma = token.lemma_
                     original_text = token.text
 
-                    # --- 强力粘合逻辑 ---
+                    # 强力粘合逻辑（仅针对白名单前缀）
                     if source_code == "de" and token.i in particles_map:
-                        # 拿到所有属于该动词的前缀
                         prefixes = [p[0] for p in particles_map[token.i]]
-                        # 将前缀拼在原形前面，例如 ab + weisen = abweisen
-                        # 我们按照词序最后出现的通常是前缀，将其拼在 lemma 最前面
+                        # 组合成正确的动词原形，如 ab + plagen = abplagen
                         combined_lemma = "".join(prefixes) + lemma
                         lemma = combined_lemma
                         original_text = f"{token.text} ... {' '.join(prefixes)}"
 
-                    # 缓存与翻译
-                    cache_key = f"{source_code}_{lemma}_v2" # 更新缓存版本
+                    cache_key = f"{source_code}_{lemma}_v3" 
                     if cache_key in app.my_dict:
                         trans_info = app.my_dict[cache_key]
                     else:
@@ -120,7 +123,7 @@ if parse_btn:
                         adj_adv_data.append({"经文原词": token.text, "词类": "形容词" if token.pos_ == "ADJ" else "副词", **row_data})
 
             if verb_data:
-                st.subheader("🔍 动词对照表 (已强力粘合分离动词)")
+                st.subheader("🔍 动词对照表")
                 st.table(verb_data)
             if adj_adv_data:
                 st.subheader("🔍 形容词 & 副词对照表")
