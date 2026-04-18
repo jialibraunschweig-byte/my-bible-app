@@ -15,7 +15,7 @@ def get_nlp(lang_code):
         return spacy.load(model_name)
 
 # 页面配置
-st.set_page_config(page_title="经文翻译助手", layout="centered")
+st.set_page_config(page_title="经文全方位解析助手", layout="centered")
 
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
@@ -35,8 +35,8 @@ app = BibleWebApp()
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 经文翻译助手")
-st.caption("精准版：修复了 mit 等介词被误粘合到动词上的问题")
+st.title("📖 经文词汇全解析")
+st.caption("支持动词、形副词、名词分类提取（德语模式含英语对照）")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -50,8 +50,7 @@ with col1:
 with col2:
     st.button("清除内容", on_click=clear_text)
 
-# --- 德语常见分离前缀白名单 ---
-# 移除了容易产生误判的简单介词，除非它们确实有分离前缀的语法标记
+# 德语常见分离前缀白名单
 GERMAN_PREFIXES = {
     "ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", 
     "fest", "fort", "her", "herauf", "heraus", "herein", "hin", "hinauf", 
@@ -61,7 +60,7 @@ GERMAN_PREFIXES = {
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在分析语法...'):
+        with st.spinner('正在分析语法并分类词汇...'):
             nlp = get_nlp(source_code)
             doc = nlp(sentence)
             
@@ -73,12 +72,11 @@ if parse_btn:
 
             verb_data = []
             adj_adv_data = []
+            noun_data = [] # 新增名词列表
             
             particles_map = {} 
             if source_code == "de":
                 for token in doc:
-                    # 核心修改：只有被标记为 svp (分离前缀) 且在白名单中的词才会被粘合
-                    # 像 "mit Wein" 里的 mit，其 dep_ 通常是 'case' 而不是 'svp'
                     if token.dep_ == "svp" and token.text.lower() in GERMAN_PREFIXES:
                         verb_idx = token.head.i
                         if verb_idx not in particles_map:
@@ -88,23 +86,27 @@ if parse_btn:
             used_particle_indices = [idx for p_list in particles_map.values() for text, idx in p_list]
 
             for token in doc:
+                # 排除标点、空格、已被粘合的前缀、代词(ich/du)和冠词(der/die)
                 if token.is_punct or token.is_space or token.i in used_particle_indices:
                     continue
+                if token.pos_ in ["PRON", "DET"]: # 过滤掉简单的代词和冠词
+                    continue
                 
-                if token.pos_ in ["VERB", "AUX", "ADJ", "ADV"]:
-                    # 对于 aufzuheitern，lemma_ 已经是 aufheitern，不需要额外粘合
+                # 确定是否属于我们要提取的词性
+                target_pos = ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]
+                if token.pos_ in target_pos:
                     lemma = token.lemma_
                     original_text = token.text
 
-                    # 只有在特定的分离前缀情况下才手动粘合（比如 wiesen ... ab）
+                    # 动词粘合逻辑
                     if source_code == "de" and token.i in particles_map:
                         prefixes = [p[0] for p in particles_map[token.i]]
-                        # 检查 lemma 是否已经包含了前缀 (避免重复粘合)
                         if not any(lemma.startswith(p) for p in prefixes):
                             lemma = "".join(prefixes) + lemma
                         original_text = f"{token.text} ... {' '.join(prefixes)}"
 
-                    cache_key = f"{source_code}_{lemma}_v4" 
+                    # 翻译与缓存
+                    cache_key = f"{source_code}_{lemma}_v5" 
                     if cache_key in app.my_dict:
                         trans_info = app.my_dict[cache_key]
                     else:
@@ -119,18 +121,27 @@ if parse_btn:
                     row_data = {"词原形": lemma, "中文意思": trans_info["zh"]}
                     if trans_info["en"]: row_data["英语解释"] = trans_info["en"]
 
+                    # 按词性分类归档
                     if token.pos_ in ["VERB", "AUX"]:
                         verb_data.append({"经文动词": original_text, **row_data})
                     elif token.pos_ in ["ADJ", "ADV"]:
-                        # 确保像 mit 这样的介词不会跑进形容词表
                         adj_adv_data.append({"经文原词": token.text, "词类": "形容词" if token.pos_ == "ADJ" else "副词", **row_data})
+                    elif token.pos_ in ["NOUN", "PROPN"]:
+                        noun_data.append({"经文名词": token.text, **row_data})
 
+            # 5. 显示分类表格
             if verb_data:
                 st.subheader("🔍 动词对照表")
                 st.table(verb_data)
             if adj_adv_data:
                 st.subheader("🔍 形容词 & 副词对照表")
                 st.table(adj_adv_data)
+            if noun_data:
+                st.subheader("🔍 名词对照表")
+                st.table(noun_data)
+            
+            if not (verb_data or adj_adv_data or noun_data):
+                st.info("未能提取到符合条件的词汇。")
             
             app.save_dict()
     else:
