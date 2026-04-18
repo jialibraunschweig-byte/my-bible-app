@@ -42,7 +42,7 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文翻译助手")
-st.caption("修复版：支持英/德语自动识别与词性精准提取")
+st.caption("增强版：支持英/德语提取，德语模式下提供英语释义")
 
 # --- 语言选择 ---
 lang_option = st.radio("请先选择正确的输入语言:", ("英语 (English)", "德语 (Deutsch)"), horizontal=True)
@@ -64,7 +64,7 @@ with col2:
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在切换模型并精准解析...'):
+        with st.spinner('正在分析语法并翻译...'):
             # 1. 确认加载正确的语言模型
             nlp = get_nlp(source_code)
             
@@ -73,9 +73,12 @@ if parse_btn:
             st.subheader("📝 输入原文")
             st.info(sentence)
 
-            # 3. 全句翻译
-            translator = GoogleTranslator(source=source_code, target='zh-CN')
-            full_zh = translator.translate(sentence)
+            # 3. 初始化翻译器
+            translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
+            # 如果是德语，额外增加德转英翻译器
+            translator_en = GoogleTranslator(source='de', target='en') if source_code == "de" else None
+            
+            full_zh = translator_zh.translate(sentence)
             st.success(f"**中文意译：** {full_zh}")
 
             # 4. 执行 NLP 解析
@@ -84,41 +87,45 @@ if parse_btn:
             adj_adv_data = []
 
             for token in doc:
-                # 排除标点符号和空格
                 if token.is_punct or token.is_space:
                     continue
                 
-                # 仅处理指定的词性
                 if token.pos_ in ["VERB", "AUX", "ADJ", "ADV"]:
                     lemma = token.lemma_
                     
-                    # 缓存逻辑
-                    cache_key = f"{source_code}_{lemma}_zh"
+                    # 缓存与翻译逻辑
+                    cache_key = f"{source_code}_{lemma}_trans"
                     if cache_key in app.my_dict:
-                        zh_trans = app.my_dict[cache_key]
+                        trans_info = app.my_dict[cache_key]
                     else:
                         try:
-                            zh_trans = translator.translate(lemma)
-                            app.my_dict[cache_key] = zh_trans
+                            zh_val = translator_zh.translate(lemma)
+                            # 如果是德语，获取英语解释
+                            en_val = translator_en.translate(lemma) if translator_en else None
+                            trans_info = {"zh": zh_val, "en": en_val}
+                            app.my_dict[cache_key] = trans_info
                         except:
-                            zh_trans = "超时"
+                            trans_info = {"zh": "超时", "en": "超时"}
 
-                    # 动词归类
+                    # 构建基础数据行
+                    row_data = {
+                        "原形": lemma,
+                        "中文意思": trans_info["zh"]
+                    }
+                    # 如果有英语解释，加入行数据
+                    if trans_info["en"]:
+                        row_data["英语解释"] = trans_info["en"]
+
+                    # 分类存入
                     if token.pos_ in ["VERB", "AUX"]:
-                        verb_data.append({
-                            "经文动词": token.text,
-                            "动词原形": lemma,
-                            "中文意思": zh_trans
-                        })
-                    # 形容词副词归类
+                        v_row = {"经文动词": token.text}
+                        v_row.update(row_data)
+                        verb_data.append(v_row)
                     elif token.pos_ in ["ADJ", "ADV"]:
                         pos_label = "形容词" if token.pos_ == "ADJ" else "副词"
-                        adj_adv_data.append({
-                            "经文原词": token.text,
-                            "词类": pos_label,
-                            "词原形": lemma,
-                            "中文意思": zh_trans
-                        })
+                        a_row = {"经文原词": token.text, "词类": pos_label}
+                        a_row.update(row_data)
+                        adj_adv_data.append(a_row)
 
             # 5. 显示表格
             if verb_data:
@@ -134,7 +141,12 @@ if parse_btn:
             # 6. 生成笔记
             if verb_data or adj_adv_data:
                 note_text = f"### 学习笔记\n**原文:** {sentence}\n**意译:** {full_zh}\n\n"
-                # (此处省略 Markdown 拼接逻辑，保持与之前一致即可)
+                # 简单拼接逻辑
+                if verb_data:
+                    note_text += "#### 动词表\n" + str(verb_data) + "\n"
+                if adj_adv_data:
+                    note_text += "#### 形容/副词表\n" + str(adj_adv_data) + "\n"
+                
                 st.download_button("下载本次笔记 (.md)", note_text, file_name="study_notes.md")
     else:
         st.warning("请先粘贴内容。")
