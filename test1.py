@@ -58,7 +58,7 @@ sentence = st.text_area(
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("开始提取")
+    parse_btn = st.button("开始翻译")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
@@ -110,11 +110,11 @@ if parse_btn:
                     # 构建基础数据行
                     row_data = {
                         "原形": lemma,
-                        "中文意思": trans_info["zh"]
+                        "中文": trans_info["zh"]
                     }
                     # 如果有英语解释，加入行数据
                     if trans_info["en"]:
-                        row_data["英语解释"] = trans_info["en"]
+                        row_data["英语"] = trans_info["en"]
 
                     # 分类存入
                     if token.pos_ in ["VERB", "AUX"]:
