@@ -35,8 +35,8 @@ app = BibleWebApp()
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 经文词汇全方位解析")
-st.caption("支持英/德语动词、形副词、名词三语对照提取")
+st.title("📖 经文全方位解析助手")
+st.caption("支持英/德语动词、形副词、名词及短语搭配提取")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -62,11 +62,10 @@ GERMAN_PREFIXES = {
 
 if parse_btn:
     if sentence:
-        with st.spinner('正在分析语法并生成三语对照...'):
+        with st.spinner('正在分析语法并提取短语...'):
             nlp = get_nlp(source_code)
             doc = nlp(sentence)
             
-            # 初始化翻译器：一个翻中文，一个翻辅助语言(英/德)
             translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
             translator_aux = GoogleTranslator(source=source_code, target=target_aux_code)
             
@@ -75,9 +74,33 @@ if parse_btn:
 
             verb_data = []
             adj_adv_data = []
-            noun_data = [] 
+            noun_data = []
+            phrase_data = [] # 新增短语数据
             
-            # 分离动词逻辑 (仅限德语模式)
+            # 1. 提取短语搭配 (Noun Chunks)
+            # 过滤掉只有单个词的名词块，只保留真正的“短语”
+            for chunk in doc.noun_chunks:
+                phrase_text = chunk.text.strip()
+                if len(phrase_text.split()) > 1: # 确保是多个词组成的短语
+                    cache_key = f"{source_code}_{phrase_text}_ph"
+                    if cache_key in app.my_dict:
+                        trans_info = app.my_dict[cache_key]
+                    else:
+                        try:
+                            zh_val = translator_zh.translate(phrase_text)
+                            aux_val = translator_aux.translate(phrase_text)
+                            trans_info = {"zh": zh_val, "aux": aux_val}
+                            app.my_dict[cache_key] = trans_info
+                        except:
+                            trans_info = {"zh": "超时", "aux": "超时"}
+                    
+                    phrase_data.append({
+                        "短语搭配": phrase_text,
+                        "中文意思": trans_info["zh"],
+                        aux_col_name: trans_info["aux"]
+                    })
+
+            # 2. 提取单词 (动词、名词等)
             particles_map = {} 
             if source_code == "de":
                 for token in doc:
@@ -90,27 +113,22 @@ if parse_btn:
             used_particle_indices = [idx for p_list in particles_map.values() for text, idx in p_list]
 
             for token in doc:
-                # 基础过滤：标点、空格、分离前缀
                 if token.is_punct or token.is_space or token.i in used_particle_indices:
                     continue
-                # 过滤代词和冠词
                 if token.pos_ in ["PRON", "DET"]:
                     continue
                 
-                # 目标词性
                 if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                     lemma = token.lemma_
                     original_text = token.text
 
-                    # 德语动词粘合
                     if source_code == "de" and token.i in particles_map:
                         prefixes = [p[0] for p in particles_map[token.i]]
                         if not any(lemma.startswith(p) for p in prefixes):
                             lemma = "".join(prefixes) + lemma
                         original_text = f"{token.text} ... {' '.join(prefixes)}"
 
-                    # 翻译与缓存 (包含辅助语言翻译)
-                    cache_key = f"{source_code}_{lemma}_v6" 
+                    cache_key = f"{source_code}_{lemma}_v7" 
                     if cache_key in app.my_dict:
                         trans_info = app.my_dict[cache_key]
                     else:
@@ -122,14 +140,8 @@ if parse_btn:
                         except:
                             trans_info = {"zh": "超时", "aux": "超时"}
 
-                    # 构建统一行数据
-                    row_data = {
-                        "词原形": lemma,
-                        "中文意思": trans_info["zh"],
-                        aux_col_name: trans_info["aux"]
-                    }
+                    row_data = {"词原形": lemma, "中文意思": trans_info["zh"], aux_col_name: trans_info["aux"]}
 
-                    # 分类归档
                     if token.pos_ in ["VERB", "AUX"]:
                         verb_data.append({"经文动词": original_text, **row_data})
                     elif token.pos_ in ["ADJ", "ADV"]:
@@ -138,8 +150,11 @@ if parse_btn:
                         noun_data.append({"经文名词": token.text, **row_data})
 
             # 显示表格
+            if phrase_data:
+                st.subheader("📚 短语搭配对照表")
+                st.table(phrase_data)
             if verb_data:
-                st.subheader(f"🔍 动词对照表 ({lang_option.split()[0]})")
+                st.subheader("🔍 动词对照表")
                 st.table(verb_data)
             if adj_adv_data:
                 st.subheader("🔍 形容词 & 副词对照表")
@@ -147,9 +162,6 @@ if parse_btn:
             if noun_data:
                 st.subheader("🔍 名词对照表")
                 st.table(noun_data)
-            
-            if not (verb_data or adj_adv_data or noun_data):
-                st.info("在该段文本中未提取到符合条件的词汇。")
             
             app.save_dict()
     else:
