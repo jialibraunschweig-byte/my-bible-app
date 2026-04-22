@@ -36,7 +36,7 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文词汇与固定短语解析")
-st.caption("最终增强版：深度捕获 zugrunde gehen 等各类复杂句式中的固定搭配")
+st.caption("最终增强版")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -48,7 +48,7 @@ sentence = st.text_area("请粘贴经文内容:", key="input_sentence", height=1
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("开始提取")
+    parse_btn = st.button("开始翻译")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
