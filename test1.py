@@ -15,7 +15,7 @@ def get_nlp(lang_code):
         return spacy.load(model_name)
 
 # 页面配置
-st.set_page_config(page_title="经文全解析 - 增强版", layout="centered")
+st.set_page_config(page_title="经文全解析 - 精准短语版", layout="centered")
 
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
@@ -36,7 +36,7 @@ def clear_text():
     st.session_state["input_sentence"] = ""
 
 st.title("📖 经文词汇与固定短语解析")
-st.caption("修复版：针对 zugrunde gehen 等德语固定搭配进行了深度优化")
+st.caption("精准版：已过滤 'nicht gehen' 等简单否定，专注 'zugrunde gehen' 等实义搭配")
 
 # --- 语言选择 ---
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -68,33 +68,34 @@ if parse_btn:
             st.success(f"**中文意译：** {full_zh}")
 
             verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
-            
-            # --- 核心改进：更强力的固定搭配提取逻辑 ---
-            processed_phrases = set() # 用于去重
+            processed_phrases = set()
 
+            # --- 核心改进：带实义过滤的短语提取 ---
             for token in doc:
-                # 当遇到动词或特定补足语时进行关联
                 if token.pos_ in ["VERB", "AUX"]:
                     phrase_tokens = [token]
+                    has_content_word = False # 标记是否含有实义词（名词/形容词等）
                     
-                    # 检索所有与动词相关的补足语 (包括 zugrunde, in Kauf 等)
                     for child in token.children:
-                        # 德语中 zugrunde 经常被标记为 advmod 或 compound
-                        if child.dep_ in ["compound", "advmod", "obj", "obl", "xcomp", "ng"]:
-                            # 过滤：只提取短小的、有实际意义的词组 (长度 < 4)
-                            if child.pos_ in ["NOUN", "ADV", "ADP", "PART"]:
-                                sub_tree = [t for t in child.subtree if not t.is_punct]
-                                if 0 < len(sub_tree) < 4:
-                                    phrase_tokens.extend(sub_tree)
-                    
-                    if len(phrase_tokens) > 1:
-                        # 按语序排序并去重
+                        # 检查是否有实义补足语
+                        if child.dep_ in ["compound", "obj", "obl", "xcomp", "advmod"]:
+                            # 只有当补足语是名词、形容词或特定的核心副词时才认为是“固定搭配”
+                            if child.pos_ in ["NOUN", "ADJ", "PROPN"] or child.text.lower() == "zugrunde":
+                                has_content_word = True
+                                sub_tree = [t for t in child.subtree if not t.is_punct and t.pos_ != "AUX"]
+                                phrase_tokens.extend(sub_tree)
+                            # 排除掉只有 nicht, so, sehr 这种程度/否定词的简单修饰
+                            elif child.pos_ == "PART" and child.text.lower() == "nicht":
+                                # 虽然包含 nicht，但如果不含名词，我们稍后会过滤掉它
+                                phrase_tokens.append(child)
+
+                    # 判定：必须包含多个词，且必须含有一个实义词（如 zugrunde 或名词）
+                    if len(phrase_tokens) > 1 and has_content_word:
                         phrase_tokens = sorted(list(set(phrase_tokens)), key=lambda x: x.i)
                         phrase_text = " ".join([t.text for t in phrase_tokens])
                         
-                        # 特殊过滤：排除包含 "nicht" 的简单否定，除非它是搭配的一部分
                         if phrase_text.lower() not in processed_phrases:
-                            cache_key = f"{source_code}_{phrase_text}_idiom_v8"
+                            cache_key = f"{source_code}_{phrase_text}_idiom_v9"
                             if cache_key not in app.my_dict:
                                 try:
                                     zh_val = translator_zh.translate(phrase_text)
@@ -128,7 +129,7 @@ if parse_btn:
                         if not lemma.startswith(pref): lemma = pref + lemma
                         original_text = f"{token.text} ... {pref}"
 
-                    cache_key = f"{source_code}_{lemma}_final_v8" 
+                    cache_key = f"{source_code}_{lemma}_final_v9" 
                     if cache_key not in app.my_dict:
                         try:
                             zh_val = translator_zh.translate(lemma)
@@ -144,7 +145,7 @@ if parse_btn:
                     elif token.pos_ in ["ADJ", "ADV"]: adj_adv_data.append({"经文原词": token.text, "词类": "形/副", **row})
                     elif token.pos_ in ["NOUN", "PROPN"]: noun_data.append({"经文名词": token.text, **row})
 
-            # 界面展示
+            # 展示结果
             if phrase_data:
                 st.subheader("🚀 固定短语/搭配表")
                 st.table(phrase_data)
