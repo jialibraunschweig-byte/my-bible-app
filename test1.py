@@ -35,8 +35,8 @@ app = BibleWebApp()
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 德语固定搭配全自动提取")
-st.caption("核心改进：自动还原动词原形，精准识别 'zu etwas aufbrechen' 等搭配")
+st.title("📖 经文翻译器")
+st.caption("核心改进：自动还原动词原形，精准识别固定搭配")
 
 lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -47,7 +47,7 @@ sentence = st.text_area("请粘贴经文/句子:", key="input_sentence", height=
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("开始分析")
+    parse_btn = st.button("翻译")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
