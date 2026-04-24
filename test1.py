@@ -43,11 +43,11 @@ source_code = "de" if "德语" in lang_option else "en"
 target_aux_code = "en" if source_code == "de" else "de"
 aux_col_name = "英语解释" if source_code == "de" else "德语解释"
 
-sentence = st.text_area("请粘贴经文/句子:", key="input_sentence", height=120)
+sentence = st.text_area("请粘贴经文:", key="input_sentence", height=120)
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("翻译")
+    parse_btn = st.button("开始翻译")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
