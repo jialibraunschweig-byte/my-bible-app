@@ -32,12 +32,11 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心翻译逻辑：增加语境引导 ---
+# --- 2. 核心翻译逻辑 ---
 def smart_translate(text, pos, source_lang="de"):
     try:
         if source_lang == "de":
             if pos == "VERB":
-                # 针对动词，引导翻译引擎进入“行为/法律”语境
                 query = f"Bedeutung vom Verb '{text}' im Sinne von Gesetz oder Handlung"
             elif pos == "PHRASE":
                 query = f"Was bedeutet die Redewendung '{text}'?"
@@ -45,7 +44,6 @@ def smart_translate(text, pos, source_lang="de"):
                 query = text
             
             raw_res = GoogleTranslator(source='de', target='zh-CN').translate(query)
-            # 清理冗余的引导词
             return raw_res.replace("的意思是", "").replace("含义是", "").split("：")[-1].strip()
         else:
             return GoogleTranslator(source=source_lang, target='zh-CN').translate(text)
@@ -55,8 +53,15 @@ def smart_translate(text, pos, source_lang="de"):
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 德语经文精准解析器 (雅各书 2:11 修复版)")
-st.caption("核心改进：修正 übertreten, umbringen 等动词的原形还原错误")
+# --- 3. 过滤列表：排除物主代词 (Possessive Pronouns) ---
+# 这些词虽然常被标记为 ADJ，但实际上是代词性质
+EXCLUDE_PRONOMINAL_ADJS = {
+    "mein", "dein", "sein", "ihr", "unser", "euer", "ihre", 
+    "meine", "deine", "seine", "unsere", "eure", "ihrer", "ihres"
+}
+
+st.title("📖 德语经文精准解析器")
+st.info("💡 已优化：形容词表中将不再显示物主代词（如 deine, eure, ihre 等）。")
 
 # --- UI 布局 ---
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
@@ -74,11 +79,10 @@ with col2:
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('正在分析语法并修正词形还原...'):
+    with st.spinner('正在分析语法并过滤无关词汇...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        # 全句翻译
         full_zh = GoogleTranslator(source=source_code, target='zh-CN').translate(sentence)
         st.success(f"**全句意译：** {full_zh}")
 
@@ -91,43 +95,40 @@ if parse_btn and sentence:
             if token.dep_ == "svp":
                 particles_map[token.head.i] = token.text.lower()
 
-        # --- 遍历解析 ---
         for token in doc:
-            # 过滤不需要的成分
-            if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART"]:
+            # 过滤掉标点、代词、冠词、连词等基础结构词
+            if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
                 continue
             
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                 lemma = token.lemma_.lower()
                 original_text = token.text
                 
-                # --- 核心修正逻辑 ---
-                if source_code == "de":
-                    # 1. 修正 spaCy 的误判 (如 übertreen -> übertreten)
+                # --- A. 动词修正逻辑 ---
+                if source_code == "de" and token.pos_ == "VERB":
                     if lemma.endswith("een") and not lemma.endswith("gehen"):
-                        # 如果原词包含 'et', 尝试补回
-                        if "et" in original_text.lower():
-                            lemma = lemma.replace("een", "eten")
-                        else:
-                            lemma = original_text.lower() # 兜底：使用原始词
+                        if "et" in original_text.lower(): lemma = lemma.replace("een", "eten")
+                        else: lemma = original_text.lower()
                     
-                    # 2. 修正 brichst -> brichsen 这种错误，手动设为 brechen
-                    if original_text.lower() == "brichst":
-                        lemma = "brechen"
+                    if original_text.lower() == "brichst": lemma = "brechen"
 
-                    # 3. 合并可分动词 (如 um + bringen)
                     if token.i in particles_map:
                         prefix = particles_map[token.i]
-                        if not lemma.startswith(prefix):
-                            lemma = prefix + lemma
+                        if not lemma.startswith(prefix): lemma = prefix + lemma
                 
-                # 缓存与翻译
+                # --- B. 形容词过滤逻辑 (关键改进) ---
+                if token.pos_ == "ADJ":
+                    # 如果原形在物主代词排除列表中，直接跳过
+                    if lemma in EXCLUDE_PRONOMINAL_ADJS:
+                        continue
+
+                # 缓存与展示
                 cache_key = f"{lemma}_{token.pos_}"
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
                     aux_trans = GoogleTranslator(source=source_code, target=target_aux_code).translate(lemma)
                     
-                    row = {"词原形": lemma, "中文意思": zh_trans, "辅助语言": aux_trans}
+                    row = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
                     
                     if token.pos_ in ["VERB", "AUX"]:
                         verb_data.append({"经文动词": original_text, **row})
@@ -138,7 +139,7 @@ if parse_btn and sentence:
                     
                     processed_keys.add(cache_key)
 
-        # --- 固定搭配提取 ---
+        # --- C. 固定搭配提取 ---
         processed_phrases = set()
         for token in doc:
             if token.pos_ == "VERB":
@@ -147,7 +148,6 @@ if parse_btn and sentence:
                         prep = child.text.lower()
                         if child.pos_ == "ADP":
                             idiom = f"{prep} etwas {token.lemma_}"
-                            # 同样修正短语中的误判
                             idiom = idiom.replace("übertreen", "übertreten")
                             if idiom not in processed_phrases:
                                 zh_idiom = smart_translate(idiom, "PHRASE", source_code)
