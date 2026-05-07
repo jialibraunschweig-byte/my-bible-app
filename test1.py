@@ -15,7 +15,7 @@ def get_nlp(lang_code):
         return spacy.load(model_name)
 
 # 页面配置
-st.set_page_config(page_title="德语经文深度解析", layout="wide")
+st.set_page_config(page_title="德语经文精准解析器", layout="wide")
 
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
@@ -32,34 +32,36 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 核心改进：智能翻译函数 ---
-def smart_translate(text, source_lang, target_lang="zh-CN", is_phrase=False):
-    """
-    通过添加上下文指令，强迫翻译引擎识别固定搭配
-    """
+# --- 2. 核心翻译逻辑：增加语境引导 ---
+def smart_translate(text, pos, source_lang="de"):
     try:
-        if is_phrase and source_lang == "de":
-            # 战术：添加德语指令前缀，引导引擎进入“词典模式”
-            query = f"Bedeutung von '{text}'"
+        if source_lang == "de":
+            if pos == "VERB":
+                # 针对动词，引导翻译引擎进入“行为/法律”语境
+                query = f"Bedeutung vom Verb '{text}' im Sinne von Gesetz oder Handlung"
+            elif pos == "PHRASE":
+                query = f"Was bedeutet die Redewendung '{text}'?"
+            else:
+                query = text
+            
             raw_res = GoogleTranslator(source='de', target='zh-CN').translate(query)
-            # 简单清理：去掉翻译中可能出现的“...的意思”
-            return raw_res.replace("的意思", "").replace("的含义", "").replace("含义", "")
+            # 清理冗余的引导词
+            return raw_res.replace("的意思是", "").replace("含义是", "").split("：")[-1].strip()
         else:
-            return GoogleTranslator(source=source_lang, target=target_lang).translate(text)
+            return GoogleTranslator(source=source_lang, target='zh-CN').translate(text)
     except:
         return "翻译超时"
 
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 德语经文/长句智能解析器")
-st.info("💡 当前模式：优化版 Google 引擎（自动识别 zu etwas aufbrechen 等固定搭配）")
+st.title("📖 德语经文精准解析器 (雅各书 2:11 修复版)")
+st.caption("核心改进：修正 übertreten, umbringen 等动词的原形还原错误")
 
 # --- UI 布局 ---
-lang_option = st.radio("选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
+lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 target_aux_code = "en" if source_code == "de" else "de"
-aux_col_name = "英语解释" if source_code == "de" else "德语解释"
 
 sentence = st.text_area("请粘贴德语内容:", key="input_sentence", height=150)
 
@@ -69,86 +71,97 @@ with col1:
 with col2:
     st.button("清除内容", on_click=clear_text)
 
-GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen"}
+GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('正在分析句法并优化翻译结果...'):
+    with st.spinner('正在分析语法并修正词形还原...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        # 1. 全句翻译
-        full_zh = smart_translate(sentence, source_code, "zh-CN")
+        # 全句翻译
+        full_zh = GoogleTranslator(source=source_code, target='zh-CN').translate(sentence)
         st.success(f"**全句意译：** {full_zh}")
 
         verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
-        processed_phrases = set()
+        processed_keys = set()
 
-        # --- 2. 改进版短语识别：自动补全 'etwas' ---
+        # 预处理可分前缀
+        particles_map = {}
         for token in doc:
-            if token.pos_ in ["VERB", "AUX"]:
-                for child in token.children:
-                    # 寻找介词补足语 (zu, nach, vor 等)
-                    if child.dep_ in ["prep", "obl"]:
-                        prep = child.text if child.pos_ == "ADP" else ""
-                        if prep:
-                            # 构造标准原形：如 "zu etwas aufbrechen"
-                            idiom_lemma = f"{prep} etwas {token.lemma_}"
-                            
-                            if idiom_lemma.lower() not in processed_phrases:
-                                cache_key = f"{source_code}_{idiom_lemma}_smart_v13"
-                                if cache_key not in app.my_dict:
-                                    app.my_dict[cache_key] = {
-                                        "zh": smart_translate(idiom_lemma, source_code, "zh-CN", is_phrase=True),
-                                        "aux": smart_translate(idiom_lemma, source_code, target_aux_code)
-                                    }
-                                
-                                res = app.my_dict[cache_key]
-                                phrase_data.append({"固定搭配 (原形)": idiom_lemma, "中文意思": res["zh"], aux_col_name: res["aux"]})
-                                processed_phrases.add(idiom_lemma.lower())
+            if token.dep_ == "svp":
+                particles_map[token.head.i] = token.text.lower()
 
-        # --- 3. 基础单词提取 ---
-        particles_map = {} 
-        if source_code == "de":
-            for token in doc:
-                if token.dep_ == "svp" and token.text.lower() in GERMAN_PREFIXES:
-                    if token.head.i not in particles_map: particles_map[token.head.i] = []
-                    particles_map[token.head.i].append(token.text.lower())
-
+        # --- 遍历解析 ---
         for token in doc:
-            if token.is_punct or token.is_space or token.dep_ == "svp" or token.pos_ in ["PRON", "DET"]:
+            # 过滤不需要的成分
+            if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART"]:
                 continue
             
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
-                lemma = token.lemma_
+                lemma = token.lemma_.lower()
                 original_text = token.text
                 
-                # 处理可分动词前缀
-                if source_code == "de" and token.i in particles_map:
-                    pref = "".join(particles_map[token.i])
-                    if not lemma.startswith(pref): lemma = pref + lemma
-                
-                cache_key = f"{source_code}_{lemma}_smart_v13"
-                if cache_key not in app.my_dict:
-                    app.my_dict[cache_key] = {
-                        "zh": smart_translate(lemma, source_code, "zh-CN"),
-                        "aux": smart_translate(lemma, source_code, target_aux_code)
-                    }
-                
-                row = {"词原形": lemma, "中文意思": app.my_dict[cache_key]["zh"], aux_col_name: app.my_dict[cache_key]["aux"]}
-                if token.pos_ in ["VERB", "AUX"]: verb_data.append({"经文动词": original_text, **row})
-                elif token.pos_ in ["ADJ", "ADV"]: adj_adv_data.append({"经文原词": token.text, "词类": "形/副", **row})
-                elif token.pos_ in ["NOUN", "PROPN"]: noun_data.append({"经文名词": token.text, **row})
+                # --- 核心修正逻辑 ---
+                if source_code == "de":
+                    # 1. 修正 spaCy 的误判 (如 übertreen -> übertreten)
+                    if lemma.endswith("een") and not lemma.endswith("gehen"):
+                        # 如果原词包含 'et', 尝试补回
+                        if "et" in original_text.lower():
+                            lemma = lemma.replace("een", "eten")
+                        else:
+                            lemma = original_text.lower() # 兜底：使用原始词
+                    
+                    # 2. 修正 brichst -> brichsen 这种错误，手动设为 brechen
+                    if original_text.lower() == "brichst":
+                        lemma = "brechen"
 
-        # --- 4. 结果展示 ---
+                    # 3. 合并可分动词 (如 um + bringen)
+                    if token.i in particles_map:
+                        prefix = particles_map[token.i]
+                        if not lemma.startswith(prefix):
+                            lemma = prefix + lemma
+                
+                # 缓存与翻译
+                cache_key = f"{lemma}_{token.pos_}"
+                if cache_key not in processed_keys:
+                    zh_trans = smart_translate(lemma, token.pos_, source_code)
+                    aux_trans = GoogleTranslator(source=source_code, target=target_aux_code).translate(lemma)
+                    
+                    row = {"词原形": lemma, "中文意思": zh_trans, "辅助语言": aux_trans}
+                    
+                    if token.pos_ in ["VERB", "AUX"]:
+                        verb_data.append({"经文动词": original_text, **row})
+                    elif token.pos_ in ["NOUN", "PROPN"]:
+                        noun_data.append({"经文名词": original_text, **row})
+                    else:
+                        adj_adv_data.append({"经文原词": original_text, "词类": "形/副", **row})
+                    
+                    processed_keys.add(cache_key)
+
+        # --- 固定搭配提取 ---
+        processed_phrases = set()
+        for token in doc:
+            if token.pos_ == "VERB":
+                for child in token.children:
+                    if child.dep_ in ["prep", "obl"]:
+                        prep = child.text.lower()
+                        if child.pos_ == "ADP":
+                            idiom = f"{prep} etwas {token.lemma_}"
+                            # 同样修正短语中的误判
+                            idiom = idiom.replace("übertreen", "übertreten")
+                            if idiom not in processed_phrases:
+                                zh_idiom = smart_translate(idiom, "PHRASE", source_code)
+                                phrase_data.append({"固定搭配": idiom, "中文意思": zh_idiom})
+                                processed_phrases.add(idiom)
+
+        # --- 展示表格 ---
         if phrase_data:
-            st.subheader("🚀 识别到的固定搭配")
+            st.subheader("🚀 固定搭配解析")
             st.table(phrase_data)
         
-        tab1, tab2, tab3 = st.tabs(["动词解析", "名词解析", "形/副解析"])
-        with tab1: st.table(verb_data)
-        with tab2: st.table(noun_data)
-        with tab3: st.table(adj_adv_data)
-        
+        t1, t2, t3 = st.tabs(["动词解析", "名词解析", "形容词/副词"])
+        with t1: st.table(verb_data)
+        with t2: st.table(noun_data)
+        with t3: st.table(adj_adv_data)
+
         app.save_dict()
-elif parse_btn:
-    st.warning("内容不能为空。")
