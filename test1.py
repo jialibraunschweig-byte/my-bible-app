@@ -15,7 +15,7 @@ def get_nlp(lang_code):
         return spacy.load(model_name)
 
 # 页面配置
-st.set_page_config(page_title="德语固定搭配精准解析", layout="centered")
+st.set_page_config(page_title="德语经文深度解析", layout="wide")
 
 class BibleWebApp:
     def __init__(self, dict_path="my_dict.json"):
@@ -32,114 +32,123 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
+# --- 核心改进：智能翻译函数 ---
+def smart_translate(text, source_lang, target_lang="zh-CN", is_phrase=False):
+    """
+    通过添加上下文指令，强迫翻译引擎识别固定搭配
+    """
+    try:
+        if is_phrase and source_lang == "de":
+            # 战术：添加德语指令前缀，引导引擎进入“词典模式”
+            query = f"Bedeutung von '{text}'"
+            raw_res = GoogleTranslator(source='de', target='zh-CN').translate(query)
+            # 简单清理：去掉翻译中可能出现的“...的意思”
+            return raw_res.replace("的意思", "").replace("的含义", "").replace("含义", "")
+        else:
+            return GoogleTranslator(source=source_lang, target=target_lang).translate(text)
+    except:
+        return "翻译超时"
+
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-st.title("📖 经文翻译器")
-st.caption("核心改进：自动还原动词原形，精准识别固定搭配")
+st.title("📖 德语经文/长句智能解析器")
+st.info("💡 当前模式：优化版 Google 引擎（自动识别 zu etwas aufbrechen 等固定搭配）")
 
-lang_option = st.radio("请选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
+# --- UI 布局 ---
+lang_option = st.radio("选择输入语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 target_aux_code = "en" if source_code == "de" else "de"
 aux_col_name = "英语解释" if source_code == "de" else "德语解释"
 
-sentence = st.text_area("请粘贴经文:", key="input_sentence", height=120)
+sentence = st.text_area("请粘贴德语内容:", key="input_sentence", height=150)
 
 col1, col2 = st.columns([1, 5])
 with col1:
-    parse_btn = st.button("开始翻译")
+    parse_btn = st.button("开始深度解析")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen"}
 
-if parse_btn:
-    if sentence:
-        with st.spinner('正在分析句法结构并还原词形...'):
-            nlp = get_nlp(source_code)
-            doc = nlp(sentence)
-            
-            translator_zh = GoogleTranslator(source=source_code, target='zh-CN')
-            translator_aux = GoogleTranslator(source=source_code, target=target_aux_code)
-            
-            full_zh = translator_zh.translate(sentence)
-            st.success(f"**中文意译：** {full_zh}")
+if parse_btn and sentence:
+    with st.spinner('正在分析句法并优化翻译结果...'):
+        nlp = get_nlp(source_code)
+        doc = nlp(sentence)
+        
+        # 1. 全句翻译
+        full_zh = smart_translate(sentence, source_code, "zh-CN")
+        st.success(f"**全句意译：** {full_zh}")
 
-            verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
-            processed_phrases = set()
+        verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
+        processed_phrases = set()
 
-            # --- 核心改进：短语原形化提取 ---
-            for token in doc:
-                if token.pos_ in ["VERB", "AUX"]:
-                    # 尝试寻找介词和关联的名词
-                    for child in token.children:
-                        if child.dep_ in ["prep", "obl", "obj"]:
-                            # 捕获介词（如 zu）
-                            prep_word = child.text if child.pos_ == "ADP" else ""
-                            # 捕获该分支下的名词原形（如 Expedition）
-                            content_words = [t.lemma_ for t in child.subtree if t.pos_ in ["NOUN", "PROPN"]]
+        # --- 2. 改进版短语识别：自动补全 'etwas' ---
+        for token in doc:
+            if token.pos_ in ["VERB", "AUX"]:
+                for child in token.children:
+                    # 寻找介词补足语 (zu, nach, vor 等)
+                    if child.dep_ in ["prep", "obl"]:
+                        prep = child.text if child.pos_ == "ADP" else ""
+                        if prep:
+                            # 构造标准原形：如 "zu etwas aufbrechen"
+                            idiom_lemma = f"{prep} etwas {token.lemma_}"
                             
-                            if prep_word or content_words:
-                                # 构造原形搭配：例如 "zu etwas aufbrechen"
-                                if prep_word:
-                                    display_phrase = f"{prep_word} etwas {token.lemma_}"
-                                else:
-                                    display_phrase = f"{token.lemma_} ({' '.join(content_words)})"
+                            if idiom_lemma.lower() not in processed_phrases:
+                                cache_key = f"{source_code}_{idiom_lemma}_smart_v13"
+                                if cache_key not in app.my_dict:
+                                    app.my_dict[cache_key] = {
+                                        "zh": smart_translate(idiom_lemma, source_code, "zh-CN", is_phrase=True),
+                                        "aux": smart_translate(idiom_lemma, source_code, target_aux_code)
+                                    }
                                 
-                                if display_phrase.lower() not in processed_phrases:
-                                    cache_key = f"{source_code}_{display_phrase}_idiom_final_v12"
-                                    if cache_key not in app.my_dict:
-                                        try:
-                                            # 使用原形进行翻译，准确率大幅提升
-                                            app.my_dict[cache_key] = {
-                                                "zh": translator_zh.translate(display_phrase),
-                                                "aux": translator_aux.translate(display_phrase)
-                                            }
-                                        except:
-                                            app.my_dict[cache_key] = {"zh": "超时", "aux": "超时"}
-                                    
-                                    res = app.my_dict[cache_key]
-                                    phrase_data.append({"固定搭配 (原形)": display_phrase, "中文意思": res["zh"], aux_col_name: res["aux"]})
-                                    processed_phrases.add(display_phrase.lower())
+                                res = app.my_dict[cache_key]
+                                phrase_data.append({"固定搭配 (原形)": idiom_lemma, "中文意思": res["zh"], aux_col_name: res["aux"]})
+                                processed_phrases.add(idiom_lemma.lower())
 
-            # --- 基础单词提取 ---
-            particles_map = {} 
-            if source_code == "de":
-                for token in doc:
-                    if token.dep_ == "svp" and token.text.lower() in GERMAN_PREFIXES:
-                        if token.head.i not in particles_map: particles_map[token.head.i] = []
-                        particles_map[token.head.i].append(token.text.lower())
-
+        # --- 3. 基础单词提取 ---
+        particles_map = {} 
+        if source_code == "de":
             for token in doc:
-                if token.is_punct or token.is_space or token.dep_ == "svp" or token.pos_ in ["PRON", "DET"]:
-                    continue
-                if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
-                    lemma = token.lemma_
-                    original_text = token.text
-                    if source_code == "de" and token.i in particles_map:
-                        pref = "".join(particles_map[token.i])
-                        if not lemma.startswith(pref): lemma = pref + lemma
-                    
-                    cache_key = f"{source_code}_{lemma}_v12"
-                    if cache_key not in app.my_dict:
-                        try:
-                            app.my_dict[cache_key] = {
-                                "zh": translator_zh.translate(lemma),
-                                "aux": translator_aux.translate(lemma)
-                            }
-                        except:
-                            app.my_dict[cache_key] = {"zh": "错误", "aux": "错误"}
-                    
-                    row = {"词原形": lemma, "中文意思": app.my_dict[cache_key]["zh"], aux_col_name: app.my_dict[cache_key]["aux"]}
-                    if token.pos_ in ["VERB", "AUX"]: verb_data.append({"经文动词": original_text, **row})
-                    elif token.pos_ in ["ADJ", "ADV"]: adj_adv_data.append({"经文原词": token.text, "词类": "形/副词", **row})
-                    elif token.pos_ in ["NOUN", "PROPN"]: noun_data.append({"经文名词": token.text, **row})
+                if token.dep_ == "svp" and token.text.lower() in GERMAN_PREFIXES:
+                    if token.head.i not in particles_map: particles_map[token.head.i] = []
+                    particles_map[token.head.i].append(token.text.lower())
 
-            # 展示
-            if phrase_data:
-                st.subheader("🚀 固定搭配提取 (还原原形)")
-                st.table(phrase_data)
-            if verb_data: st.subheader("🔍 动词表"); st.table(verb_data)
-            if noun_data: st.subheader("🔍 名词表"); st.table(noun_data)
-            if adj_adv_data: st.subheader("🔍 形容词/副词表"); st.table(adj_adv_data)
-            app.save_dict()
+        for token in doc:
+            if token.is_punct or token.is_space or token.dep_ == "svp" or token.pos_ in ["PRON", "DET"]:
+                continue
+            
+            if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
+                lemma = token.lemma_
+                original_text = token.text
+                
+                # 处理可分动词前缀
+                if source_code == "de" and token.i in particles_map:
+                    pref = "".join(particles_map[token.i])
+                    if not lemma.startswith(pref): lemma = pref + lemma
+                
+                cache_key = f"{source_code}_{lemma}_smart_v13"
+                if cache_key not in app.my_dict:
+                    app.my_dict[cache_key] = {
+                        "zh": smart_translate(lemma, source_code, "zh-CN"),
+                        "aux": smart_translate(lemma, source_code, target_aux_code)
+                    }
+                
+                row = {"词原形": lemma, "中文意思": app.my_dict[cache_key]["zh"], aux_col_name: app.my_dict[cache_key]["aux"]}
+                if token.pos_ in ["VERB", "AUX"]: verb_data.append({"经文动词": original_text, **row})
+                elif token.pos_ in ["ADJ", "ADV"]: adj_adv_data.append({"经文原词": token.text, "词类": "形/副", **row})
+                elif token.pos_ in ["NOUN", "PROPN"]: noun_data.append({"经文名词": token.text, **row})
+
+        # --- 4. 结果展示 ---
+        if phrase_data:
+            st.subheader("🚀 识别到的固定搭配")
+            st.table(phrase_data)
+        
+        tab1, tab2, tab3 = st.tabs(["动词解析", "名词解析", "形/副解析"])
+        with tab1: st.table(verb_data)
+        with tab2: st.table(noun_data)
+        with tab3: st.table(adj_adv_data)
+        
+        app.save_dict()
+elif parse_btn:
+    st.warning("内容不能为空。")
