@@ -32,7 +32,7 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心翻译逻辑 ---
+# --- 2. 智能翻译逻辑 ---
 def smart_translate(text, pos, source_lang="de"):
     try:
         if source_lang == "de":
@@ -53,17 +53,21 @@ def smart_translate(text, pos, source_lang="de"):
 def clear_text():
     st.session_state["input_sentence"] = ""
 
-# --- 3. 过滤列表：排除物主代词 (Possessive Pronouns) ---
-# 这些词虽然常被标记为 ADJ，但实际上是代词性质
-EXCLUDE_PRONOMINAL_ADJS = {
-    "mein", "dein", "sein", "ihr", "unser", "euer", "ihre", 
-    "meine", "deine", "seine", "unsere", "eure", "ihrer", "ihres"
+# --- 3. 增强版排除列表 ---
+EXCLUDE_WORDS = {
+    "mein", "meine", "meines", "meiner", "meinem", "meinen",
+    "dein", "deine", "deines", "deiner", "deinem", "deinen",
+    "sein", "seine", "seines", "seiner", "seinem", "seinen",
+    "unser", "unsere", "unseres", "unserer", "unserem", "unseren",
+    "euer", "eure", "eures", "eurer", "eurem", "euren",
+    "ihr", "ihre", "ihres", "ihrer", "ihrem", "ihren",
+    "dieser", "dieses", "diese", "diesem", "diesen", "dieser",
+    "jener", "jener", "solcher", "welcher"
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已优化：形容词表中将不再显示物主代词（如 deine, eure, ihre 等）。")
+st.info("💡 已过滤代词的所有格变化形式（如 eures, ihres, meines 等）。")
 
-# --- UI 布局 ---
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 target_aux_code = "en" if source_code == "de" else "de"
@@ -79,7 +83,7 @@ with col2:
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('正在分析语法并过滤无关词汇...'):
+    with st.spinner('扫描中...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
@@ -89,40 +93,35 @@ if parse_btn and sentence:
         verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
         processed_keys = set()
 
-        # 预处理可分前缀
         particles_map = {}
         for token in doc:
             if token.dep_ == "svp":
                 particles_map[token.head.i] = token.text.lower()
 
         for token in doc:
-            # 过滤掉标点、代词、冠词、连词等基础结构词
+            # 基础过滤：代词(PRON)、限定词(DET)、介词(ADP)等直接排除
             if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
                 continue
             
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                 lemma = token.lemma_.lower()
-                original_text = token.text
+                original_text = token.text.lower()
                 
-                # --- A. 动词修正逻辑 ---
+                # --- A. 过滤物主代词（包含 eures 等各种格位） ---
+                if lemma in EXCLUDE_WORDS or original_text in EXCLUDE_WORDS:
+                    continue
+
+                # --- B. 动词逻辑修正 ---
                 if source_code == "de" and token.pos_ == "VERB":
                     if lemma.endswith("een") and not lemma.endswith("gehen"):
-                        if "et" in original_text.lower(): lemma = lemma.replace("een", "eten")
-                        else: lemma = original_text.lower()
-                    
-                    if original_text.lower() == "brichst": lemma = "brechen"
-
+                        if "et" in original_text: lemma = lemma.replace("een", "eten")
+                        else: lemma = original_text
+                    if original_text == "brichst": lemma = "brechen"
                     if token.i in particles_map:
                         prefix = particles_map[token.i]
                         if not lemma.startswith(prefix): lemma = prefix + lemma
-                
-                # --- B. 形容词过滤逻辑 (关键改进) ---
-                if token.pos_ == "ADJ":
-                    # 如果原形在物主代词排除列表中，直接跳过
-                    if lemma in EXCLUDE_PRONOMINAL_ADJS:
-                        continue
 
-                # 缓存与展示
+                # --- C. 数据去重与存储 ---
                 cache_key = f"{lemma}_{token.pos_}"
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
@@ -131,30 +130,27 @@ if parse_btn and sentence:
                     row = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
                     
                     if token.pos_ in ["VERB", "AUX"]:
-                        verb_data.append({"经文动词": original_text, **row})
+                        verb_data.append({"经文动词": token.text, **row})
                     elif token.pos_ in ["NOUN", "PROPN"]:
-                        noun_data.append({"经文名词": original_text, **row})
+                        noun_data.append({"经文名词": token.text, **row})
                     else:
-                        adj_adv_data.append({"经文原词": original_text, "词类": "形/副", **row})
+                        adj_adv_data.append({"经文原词": token.text, "词类": "形/副", **row})
                     
                     processed_keys.add(cache_key)
 
-        # --- C. 固定搭配提取 ---
+        # --- D. 固定搭配提取 ---
         processed_phrases = set()
         for token in doc:
             if token.pos_ == "VERB":
                 for child in token.children:
-                    if child.dep_ in ["prep", "obl"]:
-                        prep = child.text.lower()
-                        if child.pos_ == "ADP":
-                            idiom = f"{prep} etwas {token.lemma_}"
-                            idiom = idiom.replace("übertreen", "übertreten")
-                            if idiom not in processed_phrases:
-                                zh_idiom = smart_translate(idiom, "PHRASE", source_code)
-                                phrase_data.append({"固定搭配": idiom, "中文意思": zh_idiom})
-                                processed_phrases.add(idiom)
+                    if child.dep_ in ["prep", "obl"] and child.pos_ == "ADP":
+                        idiom = f"{child.text.lower()} etwas {token.lemma_.lower()}"
+                        idiom = idiom.replace("übertreen", "übertreten")
+                        if idiom not in processed_phrases:
+                            zh_idiom = smart_translate(idiom, "PHRASE", source_code)
+                            phrase_data.append({"固定搭配": idiom, "中文意思": zh_idiom})
+                            processed_phrases.add(idiom)
 
-        # --- 展示表格 ---
         if phrase_data:
             st.subheader("🚀 固定搭配解析")
             st.table(phrase_data)
@@ -163,5 +159,5 @@ if parse_btn and sentence:
         with t1: st.table(verb_data)
         with t2: st.table(noun_data)
         with t3: st.table(adj_adv_data)
-
+        
         app.save_dict()
