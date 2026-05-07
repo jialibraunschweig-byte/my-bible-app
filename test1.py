@@ -37,7 +37,6 @@ def smart_translate(text, pos, source_lang="de"):
     try:
         if source_lang == "de":
             if pos == "VERB":
-                # 后台引导语境，确保准确
                 query = f"Bedeutung vom Verb '{text}' im Sinne von Gesetz oder Handlung"
             elif pos == "PHRASE":
                 query = f"Was bedeutet die Redewendung '{text}'?"
@@ -46,12 +45,10 @@ def smart_translate(text, pos, source_lang="de"):
             
             raw_res = GoogleTranslator(source='de', target='zh-CN').translate(query)
             
-            # --- 清洗逻辑：去掉冗余说明 ---
-            # 过滤掉“动词”、“法律”、“含义”等字眼，只取翻译出的第一个动词或词组
+            # --- 清洗逻辑 ---
             cleaned_res = raw_res.replace("的意思是", "").replace("含义是", "").replace("在法律或行动意义上的含义", "")
             cleaned_res = cleaned_res.replace("动词", "").replace("指", "").replace("意为", "")
             
-            # 如果翻译结果包含引号，提取引号内容；如果包含冒号，取冒号后的内容
             if "“" in cleaned_res and "”" in cleaned_res:
                 cleaned_res = cleaned_res.split("“")[1].split("”")[0]
             elif ":" in cleaned_res:
@@ -61,7 +58,7 @@ def smart_translate(text, pos, source_lang="de"):
                 
             return cleaned_res.strip()
         else:
-            return GoogleTranslator(source=source_code, target='zh-CN').translate(text)
+            return GoogleTranslator(source=source_lang, target='zh-CN').translate(text)
     except:
         return "翻译超时"
 
@@ -81,7 +78,7 @@ EXCLUDE_WORDS = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已修正：动词解析现在将直接显示核心词义，不再显示冗余的语境说明。")
+st.info("💡 已修正：形容词/副词表已移除“词类”列，仅显示原词、原形和意思。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -98,7 +95,7 @@ with col2:
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('正在精简解析词条...'):
+    with st.spinner('扫描并生成简洁表格...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
@@ -119,16 +116,18 @@ if parse_btn and sentence:
             
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                 lemma = token.lemma_.lower()
-                original_text = token.text.lower()
+                original_text = token.text
                 
-                if (lemma in EXCLUDE_WORDS or original_text in EXCLUDE_WORDS) and token.pos_ == "ADJ":
+                # 过滤代词形容词
+                if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ":
                     continue
 
+                # 词形修正
                 if source_code == "de" and token.pos_ == "VERB":
                     if lemma.endswith("een") and not lemma.endswith("gehen"):
-                        if "et" in original_text: lemma = lemma.replace("een", "eten")
-                        else: lemma = original_text
-                    if original_text == "brichst": lemma = "brechen"
+                        if "et" in original_text.lower(): lemma = lemma.replace("een", "eten")
+                        else: lemma = original_text.lower()
+                    if original_text.lower() == "brichst": lemma = "brechen"
                     if token.i in particles_map:
                         prefix = particles_map[token.i]
                         if not lemma.startswith(prefix): lemma = prefix + lemma
@@ -138,17 +137,20 @@ if parse_btn and sentence:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
                     aux_trans = GoogleTranslator(source=source_code, target=target_aux_code).translate(lemma)
                     
-                    row = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
+                    # 公共行数据
+                    row_base = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
                     
                     if token.pos_ in ["VERB", "AUX"]:
-                        verb_data.append({"经文动词": token.text, **row})
+                        verb_data.append({"经文动词": original_text, **row_base})
                     elif token.pos_ in ["NOUN", "PROPN"]:
-                        noun_data.append({"经文名词": token.text, **row})
+                        noun_data.append({"经文名词": original_text, **row_base})
                     else:
-                        adj_adv_data.append({"经文原词": token.text, "词类": "形/副词", **row})
+                        # 核心修改：此处去掉了 "词类" 列
+                        adj_adv_data.append({"经文原词": original_text, **row_base})
                     
                     processed_keys.add(cache_key)
 
+        # 固定搭配
         processed_phrases = set()
         for token in doc:
             if token.pos_ == "VERB":
