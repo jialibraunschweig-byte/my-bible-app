@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import os
 import spacy
-from deep_translator import GoogleTranslator
+from deep_translator import DeeplTranslator
 
 # --- 1. 模型加载 ---
 @st.cache_resource
@@ -32,35 +32,35 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心翻译逻辑：增加清洗功能 ---
+# --- 2. 升级版核心翻译逻辑：换用 DeepL 引擎，全面清空繁琐清洗 ---
+DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
+
 def smart_translate(text, pos, source_lang="de"):
     try:
-        if source_lang == "de":
+        # 统一映射语言代码，DeepL 要求大写 (DE, ZH, EN)
+        src = source_lang.upper()
+        tgt = "ZH"
+        
+        # 实例化官方 DeepL 翻译器
+        translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src, target=tgt, use_free_api=True)
+        
+        if src == "DE":
             if pos == "VERB":
-                query = f"Bedeutung vom Verb '{text}' im Sinne von Gesetz oder Handlung"
+                # 在德语单独词汇后加上短语标签，引导 DeepL 输出精准的动作中文词，无需繁琐清洗
+                query = f"{text} (Verb)"
             elif pos == "PHRASE":
-                query = f"Was bedeutet die Redewendung '{text}'?"
+                query = f"Redewendung: {text}"
             else:
                 query = text
             
-            raw_res = GoogleTranslator(source='de', target='zh-CN').translate(query)
+            translated = translator.translate(query)
             
-            # --- 清洗逻辑 ---
-            cleaned_res = raw_res.replace("的意思是", "").replace("含义是", "").replace("在法律或行动意义上的含义", "")
-            cleaned_res = cleaned_res.replace("动词", "").replace("指", "").replace("意为", "")
-            
-            if "“" in cleaned_res and "”" in cleaned_res:
-                cleaned_res = cleaned_res.split("“")[1].split("”")[0]
-            elif ":" in cleaned_res:
-                cleaned_res = cleaned_res.split(":")[-1]
-            elif "：" in cleaned_res:
-                cleaned_res = cleaned_res.split("：")[-1]
-                
-            return cleaned_res.strip()
+            # 基础降噪：仅去掉 DeepL 可能会顺带翻译的标签残余
+            return translated.replace("(动词)", "").replace("动词：", "").replace("短语：", "").strip()
         else:
-            return GoogleTranslator(source=source_lang, target='zh-CN').translate(text)
-    except:
-        return "翻译超时"
+            return translator.translate(text)
+    except Exception as e:
+        return f"翻译出错了: {str(e)}"
 
 def clear_text():
     st.session_state["input_sentence"] = ""
@@ -78,7 +78,7 @@ EXCLUDE_WORDS = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已修正：形容词/副词表已移除“词类”列，仅显示原词、原形和意思。")
+st.info("💡 已升级：翻译引擎已无缝切换至 DeepL 官方 API，提供更高质量的学术/圣经级词义解析。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -95,12 +95,14 @@ with col2:
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('扫描并生成简洁表格...'):
+    with st.spinner('DeepL 引擎正在深度解析词条...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        full_zh = GoogleTranslator(source=source_code, target='zh-CN').translate(sentence)
-        st.success(f"**全句意译：** {full_zh}")
+        # 全句意译也同步替换为 DeepL
+        full_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target="ZH", use_free_api=True)
+        full_zh = full_translator.translate(sentence)
+        st.success(f"**全句意译（DeepL 驱动）：** {full_zh}")
 
         verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
         processed_keys = set()
@@ -135,7 +137,10 @@ if parse_btn and sentence:
                 cache_key = f"{lemma}_{token.pos_}"
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
-                    aux_trans = GoogleTranslator(source=source_code, target=target_aux_code).translate(lemma)
+                    
+                    # 辅助解析同步使用 DeepL
+                    aux_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target=target_aux_code.upper(), use_free_api=True)
+                    aux_trans = aux_translator.translate(lemma)
                     
                     # 公共行数据
                     row_base = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
@@ -145,7 +150,7 @@ if parse_btn and sentence:
                     elif token.pos_ in ["NOUN", "PROPN"]:
                         noun_data.append({"经文名词": original_text, **row_base})
                     else:
-                        # 核心修改：此处去掉了 "词类" 列
+                        # 保持修改：去掉了 "词类" 列
                         adj_adv_data.append({"经文原词": original_text, **row_base})
                     
                     processed_keys.add(cache_key)
