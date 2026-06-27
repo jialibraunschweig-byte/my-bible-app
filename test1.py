@@ -32,9 +32,50 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心定义 ---
+# --- 2. 官方原生 DeepL API 门面函数 ---
 DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
 
+def deepl_direct_translate(text, source_lang, target_lang):
+    """直接通过 HTTP 请求调用 DeepL 官方 API 服务"""
+    url = "https://api-free.deepl.com/v2/translate"
+    headers = {
+        "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"
+    }
+    data = {
+        "text": [text],
+        "source_lang": source_lang.upper(),
+        "target_lang": target_lang.upper()
+    }
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            return result["translations"][0]["text"]
+        else:
+            return f"API 状态错误: {response.status_code}"
+    except Exception as e:
+        return f"网络连接失败: {str(e)}"
+
+def smart_translate(text, pos, source_lang="de"):
+    src = source_lang.lower()
+    
+    if pos == "VERB":
+        query = f"{text} (Verb)" if src == "de" else f"to {text} (Verb)"
+    elif pos == "PHRASE":
+        query = f"Redewendung: {text}" if src == "de" else f"Idiom/Phrase: {text}"
+    else:
+        query = text
+    
+    translated = deepl_direct_translate(query, source_lang=src, target_lang="ZH")
+    
+    # 移除多余标签
+    cleaned = translated.replace("(动词)", "").replace("（动词）", "").replace("动词：", "").replace("短语：", "").replace("习语：", "")
+    return cleaned.strip()
+
+def clear_text():
+    st.session_state["input_sentence"] = ""
+
+# --- 3. 增强版排除列表 ---
 EXCLUDE_WORDS = {
     "mein", "meine", "meines", "meiner", "meinem", "meinen",
     "dein", "deine", "deines", "deiner", "deinem", "deinen",
@@ -46,101 +87,138 @@ EXCLUDE_WORDS = {
     "jener", "solcher", "welcher"
 }
 
+# 德语高频基础动词过滤库（涵盖 wird/werden 等助动词）
 GERMAN_BASIC_VERBS = {
-    "sein", "ist", "sind", "war", "gewesen", "haben", "hat", "hatte", "gehabt",
-    "werden", "wird", "wurde", "geworden", "müssen", "muss", "musste", "gemusst",
-    "können", "kann", "konnte", "gekonnt", "wollen", "will", "wollte", "gewollt",
-    "sollen", "soll", "sollte", "gesollt", "kommen", "kommt", "kam", "gekommen",
+    "sein", "ist", "sind", "war", "gewesen",
+    "haben", "hat", "hatte", "gehabt",
+    "werden", "wird", "wurde", "geworden",
+    "müssen", "muss", "musste", "gemusst",
+    "können", "kann", "konnte", "gekonnt",
+    "wollen", "will", "wollte", "gewollt",
+    "sollen", "soll", "sollte", "gesollt",
+    "kommen", "kommt", "kam", "gekommen",
     "gehen", "geht", "ging", "gegangen"
 }
 
+# 🚀 优化点：英语高频基础动词过滤库（深度补充了 would, will, d 以及更全面的虚词动词）
 ENGLISH_BASIC_VERBS = {
     "be", "is", "am", "are", "was", "were", "been", "being", "'s", "'re", "wasn't", "weren't", "isn't", "aren't",
     "have", "has", "had", "having", "'ve", "'d", "hasn't", "haven't", "hadn't",
     "do", "does", "did", "done", "doing", "doesn't", "don't", "didn't",
-    "come", "comes", "came", "coming", "go", "goes", "went", "gone", "going",
+    "come", "comes", "came", "coming",
+    "go", "goes", "went", "gone", "going",
     "will", "would", "shall", "should", "can", "could", "may", "might", "must", "ought",
     "won't", "wouldn't", "shouldn't", "can't", "couldn't", "mustn't"
 }
 
-def is_basic_word(lemma, text, pos, source_code):
-    if pos in ["VERB", "AUX"]:
-        if source_code == "de": return lemma in GERMAN_BASIC_VERBS or text.lower() in GERMAN_BASIC_VERBS
-        if source_code == "en": return lemma in ENGLISH_BASIC_VERBS or text.lower() in ENGLISH_BASIC_VERBS
-    return False
+st.title("📖 德语经文精准解析器")
+st.info("💡 已升级：英语模式的过滤库已精准拦截包含 `would`、`will` 在内的所有语法型核心助动词和简写。")
 
-def deepl_direct_translate(text, source_lang, target_lang):
-    url = "https://api-free.deepl.com/v2/translate"
-    headers = {"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"}
-    data = {"text": [text], "source_lang": source_lang.upper(), "target_lang": target_lang.upper()}
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=10)
-        return response.json()["translations"][0]["text"] if response.status_code == 200 else f"API 状态错误: {response.status_code}"
-    except Exception as e: return f"网络连接失败: {str(e)}"
-
-def smart_translate(text, pos, source_lang="de"):
-    src = source_lang.lower()
-    query = f"{text} (Verb)" if pos == "VERB" else (f"Idiom/Phrase: {text}" if pos == "PHRASE" else text)
-    translated = deepl_direct_translate(query, source_lang=src, target_lang="ZH")
-    return translated.replace("(动词)", "").replace("（动词）", "").replace("动词：", "").replace("短语：", "").replace("习语：", "").strip()
-
-def clear_text(): st.session_state["input_sentence"] = ""
-
-# --- 3. UI 界面 ---
-st.title("📖 德语/英语经文精准解析器")
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
+
+# 官方标准：目标辅助语言代码
 target_aux_code = "EN" if source_code == "de" else "DE"
 
-# 使用 key="input_sentence" 绑定状态，方便按钮清除
 sentence = st.text_area("请粘贴经文内容:", key="input_sentence", height=150)
 
-# 按钮布局
 col1, col2 = st.columns([1, 5])
 with col1:
     parse_btn = st.button("开始深度解析")
 with col2:
     st.button("清除内容", on_click=clear_text)
 
-# --- 4. 解析逻辑 ---
 if parse_btn and sentence:
-    nlp = get_nlp(source_code)
-    doc = nlp(sentence)
-    full_zh = deepl_direct_translate(sentence, source_lang=source_code, target_lang="ZH")
-    st.success(f"**全句意译：** {full_zh}")
+    with st.spinner('正在直连 DeepL 官方云端解析...'):
+        nlp = get_nlp(source_code)
+        doc = nlp(sentence)
+        
+        # 全句意译
+        full_zh = deepl_direct_translate(sentence, source_lang=source_code, target_lang="ZH")
+        st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
-    verb_data, adj_adv_data, noun_data = [], [], []
-    processed_keys = set()
-    particles_map = {token.head.i: token.text.lower() for token in doc if token.dep_ == "svp"}
+        verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
+        processed_keys = set()
 
-    for token in doc:
-        if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]: continue
-        if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
-            lemma, original_text = token.lemma_.lower(), token.text
+        particles_map = {}
+        for token in doc:
+            if token.dep_ == "svp":
+                particles_map[token.head.i] = token.text.lower()
+
+        for token in doc:
+            if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
+                continue
             
-            if is_basic_word(lemma, original_text, token.pos_, source_code): continue
-            if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ": continue
-
-            if source_code == "de" and token.pos_ == "VERB":
-                if lemma.endswith("een") and not lemma.endswith("gehen"):
-                    lemma = lemma.replace("een", "eten") if "et" in original_text.lower() else original_text.lower()
-                if original_text.lower() == "brichst": lemma = "brechen"
-                if token.i in particles_map and not lemma.startswith(particles_map[token.i]):
-                    lemma = particles_map[token.i] + lemma
-
-            cache_key = f"{lemma}_{token.pos_}"
-            if cache_key not in processed_keys and not is_basic_word(lemma, lemma, token.pos_, source_code):
-                zh_trans = smart_translate(lemma, token.pos_, source_code)
-                aux_trans = deepl_direct_translate(lemma, source_lang=source_code, target_lang=target_aux_code)
-                row = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
+            if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
+                lemma = token.lemma_.lower()
+                original_text = token.text
                 
-                if token.pos_ in ["VERB", "AUX"]: verb_data.append({"经文动词": original_text, **row})
-                elif token.pos_ in ["NOUN", "PROPN"]: noun_data.append({"经文名词": original_text, **row})
-                else: adj_adv_data.append({"经文原词": original_text, **row})
-                processed_keys.add(cache_key)
+                # 智能跨语言基础动词拦截
+                if source_code == "de" and (lemma in GERMAN_BASIC_VERBS or original_text.lower() in GERMAN_BASIC_VERBS):
+                    continue
+                elif source_code == "en" and (lemma in ENGLISH_BASIC_VERBS or original_text.lower() in ENGLISH_BASIC_VERBS):
+                    continue
+                
+                # 过滤代词形容词
+                if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ":
+                    continue
 
-    t1, t2, t3 = st.tabs(["动词解析", "名词解析", "形容词/副词"])
-    with t1: st.table(verb_data)
-    with t2: st.table(noun_data)
-    with t3: st.table(adj_adv_data)
-    app.save_dict()
+                # 词形修正（仅在德语时生效）
+                if source_code == "de" and token.pos_ == "VERB":
+                    if lemma.endswith("een") and not lemma.endswith("gehen"):
+                        if "et" in original_text.lower(): lemma = lemma.replace("een", "eten")
+                        else: lemma = original_text.lower()
+                    if original_text.lower() == "brichst": lemma = "brechen"
+                    if token.i in particles_map:
+                        prefix = particles_map[token.i]
+                        if not lemma.startswith(prefix): lemma = prefix + lemma
+
+                cache_key = f"{lemma}_{token.pos_}"
+                if cache_key not in processed_keys:
+                    zh_trans = smart_translate(lemma, token.pos_, source_code)
+                    aux_trans = deepl_direct_translate(lemma, source_lang=source_code, target_lang=target_aux_code)
+                    
+                    row_base = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
+                    
+                    if token.pos_ in ["VERB", "AUX"]:
+                        verb_data.append({"经文动词": original_text, **row_base})
+                    elif token.pos_ in ["NOUN", "PROPN"]:
+                        noun_data.append({"经文名词": original_text, **row_base})
+                    else:
+                        adj_adv_data.append({"经文原词": original_text, **row_base})
+                    
+                    processed_keys.add(cache_key)
+
+        # --- 多语言固定搭配提取 ---
+        processed_phrases = set()
+        for token in doc:
+            if token.pos_ == "VERB":
+                # 基础词拦截：如果是任意语种的基础动词，不提取其相关的固定搭配
+                if source_code == "de" and token.lemma_.lower() in GERMAN_BASIC_VERBS:
+                    continue
+                elif source_code == "en" and token.lemma_.lower() in ENGLISH_BASIC_VERBS:
+                    continue
+                    
+                for child in token.children:
+                    if child.dep_ in ["prep", "obl", "prt"] and child.pos_ in ["ADP", "PART"]:
+                        if source_code == "de":
+                            idiom = f"{child.text.lower()} etwas {token.lemma_.lower()}"
+                            idiom = idiom.replace("übertreen", "übertreten")
+                        else:
+                            idiom = f"{token.lemma_.lower()} {child.text.lower()}"
+                            
+                        if idiom not in processed_phrases:
+                            zh_idiom = smart_translate(idiom, "PHRASE", source_code)
+                            phrase_data.append({"固定搭配": idiom, "中文意思": zh_idiom})
+                            processed_phrases.add(idiom)
+
+        if phrase_data:
+            st.subheader("🚀 固定搭配解析")
+            st.table(phrase_data)
+        
+        t1, t2, t3 = st.tabs(["动词解析", "名词解析", "形容词/副词"])
+        with t1: st.table(verb_data)
+        with t2: st.table(noun_data)
+        with t3: st.table(adj_adv_data)
+        
+        app.save_dict()
