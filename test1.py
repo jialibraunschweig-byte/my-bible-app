@@ -64,12 +64,9 @@ ENGLISH_BASIC_VERBS = {
 }
 
 def is_basic_word(lemma, text, pos, source_code):
-    """检测是否为基本词汇的辅助函数"""
     if pos in ["VERB", "AUX"]:
-        if source_code == "de":
-            return lemma in GERMAN_BASIC_VERBS or text.lower() in GERMAN_BASIC_VERBS
-        if source_code == "en":
-            return lemma in ENGLISH_BASIC_VERBS or text.lower() in ENGLISH_BASIC_VERBS
+        if source_code == "de": return lemma in GERMAN_BASIC_VERBS or text.lower() in GERMAN_BASIC_VERBS
+        if source_code == "en": return lemma in ENGLISH_BASIC_VERBS or text.lower() in ENGLISH_BASIC_VERBS
     return False
 
 def deepl_direct_translate(text, source_lang, target_lang):
@@ -79,8 +76,7 @@ def deepl_direct_translate(text, source_lang, target_lang):
     try:
         response = requests.post(url, headers=headers, json=data, timeout=10)
         return response.json()["translations"][0]["text"] if response.status_code == 200 else f"API 状态错误: {response.status_code}"
-    except Exception as e:
-        return f"网络连接失败: {str(e)}"
+    except Exception as e: return f"网络连接失败: {str(e)}"
 
 def smart_translate(text, pos, source_lang="de"):
     src = source_lang.lower()
@@ -90,37 +86,40 @@ def smart_translate(text, pos, source_lang="de"):
 
 def clear_text(): st.session_state["input_sentence"] = ""
 
-# --- 3. 页面与处理逻辑 ---
-st.title("📖 德语经文精准解析器")
+# --- 3. UI 界面 ---
+st.title("📖 德语/英语经文精准解析器")
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 target_aux_code = "EN" if source_code == "de" else "DE"
 
+# 使用 key="input_sentence" 绑定状态，方便按钮清除
 sentence = st.text_area("请粘贴经文内容:", key="input_sentence", height=150)
 
-if st.button("开始深度解析") and sentence:
+# 按钮布局
+col1, col2 = st.columns([1, 5])
+with col1:
+    parse_btn = st.button("开始深度解析")
+with col2:
+    st.button("清除内容", on_click=clear_text)
+
+# --- 4. 解析逻辑 ---
+if parse_btn and sentence:
     nlp = get_nlp(source_code)
     doc = nlp(sentence)
     full_zh = deepl_direct_translate(sentence, source_lang=source_code, target_lang="ZH")
     st.success(f"**全句意译：** {full_zh}")
 
-    verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
+    verb_data, adj_adv_data, noun_data = [], [], []
     processed_keys = set()
     particles_map = {token.head.i: token.text.lower() for token in doc if token.dep_ == "svp"}
 
     for token in doc:
-        if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
-            continue
-        
+        if token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]: continue
         if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
             lemma, original_text = token.lemma_.lower(), token.text
             
-            # 初次拦截
-            if is_basic_word(lemma, original_text, token.pos_, source_code):
-                continue
-                
-            if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ":
-                continue
+            if is_basic_word(lemma, original_text, token.pos_, source_code): continue
+            if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ": continue
 
             if source_code == "de" and token.pos_ == "VERB":
                 if lemma.endswith("een") and not lemma.endswith("gehen"):
@@ -130,7 +129,6 @@ if st.button("开始深度解析") and sentence:
                     lemma = particles_map[token.i] + lemma
 
             cache_key = f"{lemma}_{token.pos_}"
-            # 二次拦截：确保处理后的词也不是基本词
             if cache_key not in processed_keys and not is_basic_word(lemma, lemma, token.pos_, source_code):
                 zh_trans = smart_translate(lemma, token.pos_, source_code)
                 aux_trans = deepl_direct_translate(lemma, source_lang=source_code, target_lang=target_aux_code)
@@ -141,7 +139,6 @@ if st.button("开始深度解析") and sentence:
                 else: adj_adv_data.append({"经文原词": original_text, **row})
                 processed_keys.add(cache_key)
 
-    # 显示结果
     t1, t2, t3 = st.tabs(["动词解析", "名词解析", "形容词/副词"])
     with t1: st.table(verb_data)
     with t2: st.table(noun_data)
