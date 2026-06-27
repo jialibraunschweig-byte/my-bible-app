@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import os
 import spacy
-from deep_translator import DeeplTranslator
+import requests
 
 # --- 1. 模型加载 ---
 @st.cache_resource
@@ -32,30 +32,50 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心翻译逻辑 ---
+# --- 2. 官方原生 DeepL API 门面函数 (彻底免除第三方库包装错误) ---
 DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
 
-def smart_translate(text, pos, source_lang="de"):
+def deepl_direct_translate(text, source_lang, target_lang):
+    """直接通过 HTTP 请求调用 DeepL 官方 API 服务"""
+    # 免费版 API 终端节点
+    url = "https://api-free.deepl.com/v2/translate"
+    
+    headers = {
+        "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"
+    }
+    
+    data = {
+        "text": [text],
+        "source_lang": source_lang.upper(),
+        "target_lang": target_lang.upper()
+    }
+    
     try:
-        src = "german" if source_lang.lower() == "de" else "english"
-        tgt = "chinese (simplified)"
-        
-        translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src, target=tgt, use_free_api=True)
-        
-        if src == "german":
-            if pos == "VERB":
-                query = f"{text} (Verb)"
-            elif pos == "PHRASE":
-                query = f"Redewendung: {text}"
-            else:
-                query = text
-            
-            translated = translator.translate(query)
-            return translated.replace("(动词)", "").replace("动词：", "").replace("短语：", "").strip()
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            return result["translations"][0]["text"]
         else:
-            return translator.translate(text)
+            return f"API 状态错误: {response.status_code} - {response.text}"
     except Exception as e:
-        return f"翻译出错了: {str(e)}"
+        return f"网络连接失败: {str(e)}"
+
+
+def smart_translate(text, pos, source_lang="de"):
+    src = source_lang.lower()
+    
+    if src == "de":
+        if pos == "VERB":
+            query = f"{text} (Verb)"
+        elif pos == "PHRASE":
+            query = f"Redewendung: {text}"
+        else:
+            query = text
+        
+        translated = deepl_direct_translate(query, source_lang="DE", target_lang="ZH")
+        return translated.replace("(动词)", "").replace("动词：", "").replace("短语：", "").strip()
+    else:
+        return deepl_direct_translate(text, source_lang=source_lang, target_lang="ZH")
 
 def clear_text():
     st.session_state["input_sentence"] = ""
@@ -73,13 +93,13 @@ EXCLUDE_WORDS = {
 }
 
 st.title("📖 德语经文精准解析器")
-# 修复点：这里外层改用单引号，彻底解决 SyntaxError 嵌套冲突
-st.info('💡 已修正：改用官方推荐的英文全称语言映射模式 ("chinese (simplified)")，跳过不稳定的简写映射。')
+st.info("💡 已底层重构：全面移除不稳定的第三方包装库，直接直连 DeepL 官方原生 HTTP 接口。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 
-target_aux_code = "english" if source_code == "de" else "german"
+# 官方标准：目标辅助语言代码
+target_aux_code = "EN" if source_code == "de" else "DE"
 
 sentence = st.text_area("请粘贴德语内容:", key="input_sentence", height=150)
 
@@ -92,14 +112,13 @@ with col2:
 GERMAN_PREFIXES = {"ab", "an", "auf", "aus", "bei", "ein", "empor", "entgegen", "fest", "fort", "her", "hin", "los", "nach", "nieder", "vor", "weg", "weiter", "zu", "zurück", "zusammen", "um"}
 
 if parse_btn and sentence:
-    with st.spinner('DeepL 引擎正在深度解析词条...'):
+    with st.spinner('正在直连 DeepL 官方云端解析...'):
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        src_full = "german" if source_code == "de" else "english"
-        full_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src_full, target="chinese (simplified)", use_free_api=True)
-        full_zh = full_translator.translate(sentence)
-        st.success(f"**全句意译（DeepL 驱动）：** {full_zh}")
+        # 全句意译
+        full_zh = deepl_direct_translate(sentence, source_lang=source_code, target_lang="ZH")
+        st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
         verb_data, adj_adv_data, noun_data, phrase_data = [], [], [], []
         processed_keys = set()
@@ -134,9 +153,7 @@ if parse_btn and sentence:
                 cache_key = f"{lemma}_{token.pos_}"
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
-                    
-                    aux_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src_full, target=target_aux_code, use_free_api=True)
-                    aux_trans = aux_translator.translate(lemma)
+                    aux_trans = deepl_direct_translate(lemma, source_lang=source_code, target_lang=target_aux_code)
                     
                     # 公共行数据
                     row_base = {"词原形": lemma, "中文意思": zh_trans, "辅助解析": aux_trans}
@@ -146,6 +163,7 @@ if parse_btn and sentence:
                     elif token.pos_ in ["NOUN", "PROPN"]:
                         noun_data.append({"经文名词": original_text, **row_base})
                     else:
+                        # 保持之前的修改：去掉了“词类”列
                         adj_adv_data.append({"经文原词": original_text, **row_base})
                     
                     processed_keys.add(cache_key)
