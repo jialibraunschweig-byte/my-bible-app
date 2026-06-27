@@ -59,7 +59,6 @@ def deepl_direct_translate(text, source_lang, target_lang):
 def smart_translate(text, pos, source_lang="de"):
     src = source_lang.lower()
     
-    # 根据语言动态添加底层提示词提示 DeepL，防止返回带有“简体中文”等杂质
     if pos == "VERB":
         query = f"{text} (Verb)" if src == "de" else f"to {text} (Verb)"
     elif pos == "PHRASE":
@@ -69,8 +68,8 @@ def smart_translate(text, pos, source_lang="de"):
     
     translated = deepl_direct_translate(query, source_lang=src, target_lang="ZH")
     
-    # 清洗可能残留的标签，保持纯净词义
-    cleaned = translated.replace("(动词)", "").replace("动词：", "").replace("短语：", "").replace("习语：", "")
+    # 核心优化点：在清洗逻辑中，全面移除可能被 DeepL 带出的 "(动词)"、" (动词)"、"动词" 等后缀
+    cleaned = translated.replace("(动词)", "").replace("（动词）", "").replace("动词：", "").replace("短语：", "").replace("习语：", "")
     return cleaned.strip()
 
 def clear_text():
@@ -88,8 +87,19 @@ EXCLUDE_WORDS = {
     "jener", "solcher", "welcher"
 }
 
+# 核心优化点：需要被过滤掉的德语基础动词列表（包含词原形和常见变体）
+GERMAN_BASIC_VERBS = {
+    "sein", "ist", "sind", "war", "gewesen",
+    "haben", "hat", "hatte", "gehabt",
+    "werden", "wird", "wurde", "geworden",
+    "müssen", "muss", "musste", "gemusst",
+    "können", "kann", "konnte", "gekonnt",
+    "wollen", "will", "wollte", "gewollt",
+    "sollen", "soll", "sollte", "gesollt"
+}
+
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：全网重构了固定搭配提取逻辑，完美适配英语/德语双语种，彻底解决翻译夹杂噪音和未翻译问题。")
+st.info("💡 已升级：过滤了德语高频基础动词（如 sein, haben, werden 等），并移除了动词释义后冗余的 (动词) 标签。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -130,6 +140,10 @@ if parse_btn and sentence:
                 lemma = token.lemma_.lower()
                 original_text = token.text
                 
+                # 核心优化点：如果是德语模式，且属于基础动词或助动词，直接跳过不填入表格
+                if source_code == "de" and (lemma in GERMAN_BASIC_VERBS or original_text.lower() in GERMAN_BASIC_VERBS):
+                    continue
+                
                 # 过滤代词形容词
                 if (lemma in EXCLUDE_WORDS or original_text.lower() in EXCLUDE_WORDS) and token.pos_ == "ADJ":
                     continue
@@ -160,17 +174,19 @@ if parse_btn and sentence:
                     
                     processed_keys.add(cache_key)
 
-        # --- 🚀 修复核心：多语言固定搭配提取 ---
+        # --- 多语言固定搭配提取 ---
         processed_phrases = set()
         for token in doc:
             if token.pos_ == "VERB":
+                # 如果是基础动词，同样不提取其相关的固定搭配
+                if source_code == "de" and token.lemma_.lower() in GERMAN_BASIC_VERBS:
+                    continue
+                    
                 for child in token.children:
                     if child.dep_ in ["prep", "obl", "prt"] and child.pos_ in ["ADP", "PART"]:
-                        # 德语动词搭配习惯：介词 + etwas + 动词原形 (如: in etwas verbergen)
                         if source_code == "de":
                             idiom = f"{child.text.lower()} etwas {token.lemma_.lower()}"
                             idiom = idiom.replace("übertreen", "übertreten")
-                        # 英语动词搭配习惯：动词原形 + 介词/小品词 (如: hide in / bring to)
                         else:
                             idiom = f"{token.lemma_.lower()} {child.text.lower()}"
                             
