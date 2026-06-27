@@ -32,21 +32,19 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 升级版核心翻译逻辑：换用 DeepL 引擎，全面清空繁琐清洗 ---
+# --- 2. 核心翻译逻辑：修正 DeepL 的语言代码映射 ---
 DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
 
 def smart_translate(text, pos, source_lang="de"):
     try:
-        # 统一映射语言代码，DeepL 要求大写 (DE, ZH, EN)
-        src = source_lang.upper()
-        tgt = "ZH"
+        # DeepL 语言映射修正
+        src = source_lang.upper()      # 'DE' 或 'EN'
+        tgt = "ZH-CN"                  # 修复点：DeepL 的目标语言必须是 'ZH-CN' 而不能是 'ZH'
         
-        # 实例化官方 DeepL 翻译器
         translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src, target=tgt, use_free_api=True)
         
         if src == "DE":
             if pos == "VERB":
-                # 在德语单独词汇后加上短语标签，引导 DeepL 输出精准的动作中文词，无需繁琐清洗
                 query = f"{text} (Verb)"
             elif pos == "PHRASE":
                 query = f"Redewendung: {text}"
@@ -54,8 +52,6 @@ def smart_translate(text, pos, source_lang="de"):
                 query = text
             
             translated = translator.translate(query)
-            
-            # 基础降噪：仅去掉 DeepL 可能会顺带翻译的标签残余
             return translated.replace("(动词)", "").replace("动词：", "").replace("短语：", "").strip()
         else:
             return translator.translate(text)
@@ -78,11 +74,13 @@ EXCLUDE_WORDS = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：翻译引擎已无缝切换至 DeepL 官方 API，提供更高质量的学术/圣经级词义解析。")
+st.info("💡 已修正：修复了 DeepL 引擎中文代码不合规导致的 LanguageNotSupportedException 错误。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
-target_aux_code = "en" if source_code == "de" else "de"
+
+# 修复点：作为辅助解析（目标语言）时，DeepL 的英语和德语代码映射
+target_aux_code = "EN-US" if source_code == "de" else "DE"
 
 sentence = st.text_area("请粘贴德语内容:", key="input_sentence", height=150)
 
@@ -99,8 +97,8 @@ if parse_btn and sentence:
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        # 全句意译也同步替换为 DeepL
-        full_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target="ZH", use_free_api=True)
+        # 修复点：全句意译的目标语言从 "ZH" 修正为 "ZH-CN"
+        full_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target="ZH-CN", use_free_api=True)
         full_zh = full_translator.translate(sentence)
         st.success(f"**全句意译（DeepL 驱动）：** {full_zh}")
 
@@ -138,8 +136,8 @@ if parse_btn and sentence:
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
                     
-                    # 辅助解析同步使用 DeepL
-                    aux_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target=target_aux_code.upper(), use_free_api=True)
+                    # 辅助解析同步使用经修正的 target_aux_code
+                    aux_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=source_code.upper(), target=target_aux_code, use_free_api=True)
                     aux_trans = aux_translator.translate(lemma)
                     
                     # 公共行数据
@@ -150,7 +148,6 @@ if parse_btn and sentence:
                     elif token.pos_ in ["NOUN", "PROPN"]:
                         noun_data.append({"经文名词": original_text, **row_base})
                     else:
-                        # 保持修改：去掉了 "词类" 列
                         adj_adv_data.append({"经文原词": original_text, **row_base})
                     
                     processed_keys.add(cache_key)
