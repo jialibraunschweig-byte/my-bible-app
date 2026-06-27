@@ -192,6 +192,10 @@ if parse_btn and sentence:
         # --- 多语言固定搭配提取 ---
         processed_phrases = set()
         for token in doc:
+            # 🚀 核心改动：如果是英语模式，直接跳过固定搭配解析
+            if source_code == "en":
+                continue
+
             if token.pos_ == "VERB":
                 # 基础词拦截：如果是任意语种的基础动词，不提取其相关的固定搭配
                 if source_code == "de" and token.lemma_.lower() in GERMAN_BASIC_VERBS:
