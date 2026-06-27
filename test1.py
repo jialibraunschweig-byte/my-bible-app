@@ -32,12 +32,11 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. 核心翻译逻辑：使用 deep-translator 官方标准全称文本 ---
+# --- 2. 核心翻译逻辑 ---
 DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
 
 def smart_translate(text, pos, source_lang="de"):
     try:
-        # 终极修复：映射为 deep-translator 库内部字典要求的语言英文全称
         src = "german" if source_lang.lower() == "de" else "english"
         tgt = "chinese (simplified)"
         
@@ -74,12 +73,12 @@ EXCLUDE_WORDS = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已修正：改用官方推荐的英文全称语言映射模式（"chinese (simplified)"），跳过不稳定的简写映射。")
+# 修复点：这里外层改用单引号，彻底解决 SyntaxError 嵌套冲突
+st.info('💡 已修正：改用官方推荐的英文全称语言映射模式 ("chinese (simplified)")，跳过不稳定的简写映射。')
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
 
-# 终极修复：辅助解析目标语言全称
 target_aux_code = "english" if source_code == "de" else "german"
 
 sentence = st.text_area("请粘贴德语内容:", key="input_sentence", height=150)
@@ -97,7 +96,6 @@ if parse_btn and sentence:
         nlp = get_nlp(source_code)
         doc = nlp(sentence)
         
-        # 终极修复：全句意译转换
         src_full = "german" if source_code == "de" else "english"
         full_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src_full, target="chinese (simplified)", use_free_api=True)
         full_zh = full_translator.translate(sentence)
@@ -137,7 +135,6 @@ if parse_btn and sentence:
                 if cache_key not in processed_keys:
                     zh_trans = smart_translate(lemma, token.pos_, source_code)
                     
-                    # 终极修复：辅助解析使用全称
                     aux_translator = DeeplTranslator(api_key=DEEPL_API_KEY, source=src_full, target=target_aux_code, use_free_api=True)
                     aux_trans = aux_translator.translate(lemma)
                     
