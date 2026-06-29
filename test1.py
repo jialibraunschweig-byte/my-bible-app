@@ -105,8 +105,16 @@ SPECIAL_ADJ_LEMMA_MAP = {
     "leichtfertiges": "leichtfertig",
 }
 
+# ✅ 硬编码译文兜底字典：key=词原形，value=(中文译文, 辅助译文)
+# 用于解决 DeepL 合并词串返回结果数量不匹配导致的 cursor 错位问题
+# 如有其他词翻译不出来，直接在此处追加即可
+HARDCODED_TRANSLATION_MAP = {
+    "leichtfertig": ("轻率、鲁莽、草率", "reckless / frivolous"),
+    "gedankenlos":  ("不假思索、轻率、粗心", "thoughtlessly"),
+}
+
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：成功加入【leichtfertig 形容词强制还原引擎】，保留合并长句免 429 交互特征。")
+st.info("💡 已升级：成功加入【leichtfertig 硬编码兜底引擎】，彻底修复 DeepL 逗号分割错位问题。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -137,11 +145,11 @@ if parse_btn and sentence:
             raw_text_clean = re.sub(r'\d+', '', token.text).strip("[] .")
             if not raw_text_clean or token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
                 continue
-            
+
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                 original_text = token.text
                 original_text_clean = re.sub(r'\[\d+\]', '', original_text).strip(". ")
-                
+
                 lower_raw = original_text_clean.lower()
 
                 # 🚀 优先触发动词强拦截劫持
@@ -161,17 +169,20 @@ if parse_btn and sentence:
                     continue
                 elif source_code == "en" and (lemma in ENGLISH_BASIC_VERBS or lower_raw in ENGLISH_BASIC_VERBS):
                     continue
-                
+
                 if (lemma in EXCLUDE_WORDS or lower_raw in EXCLUDE_WORDS) and current_pos == "ADJ":
                     continue
 
                 if source_code == "de" and current_pos == "VERB":
                     if lemma.endswith("een") and not lemma.endswith("gehen"):
-                        if "et" in lower_raw: lemma = lemma.replace("een", "eten")
-                        else: lemma = lower_raw
+                        if "et" in lower_raw:
+                            lemma = lemma.replace("een", "eten")
+                        else:
+                            lemma = lower_raw
                     if token.i in particles_map:
                         prefix = particles_map[token.i]
-                        if not lemma.startswith(prefix): lemma = prefix + lemma
+                        if not lemma.startswith(prefix):
+                            lemma = prefix + lemma
 
                 cache_key = f"{lemma}_{current_pos}"
                 if cache_key not in processed_keys:
@@ -192,15 +203,22 @@ if parse_btn and sentence:
                                 phrase_tasks.append(idiom)
                                 processed_phrases.add(idiom)
 
-        # 3. 本地缓存分流调度
+        # 3. 本地缓存分流调度（含硬编码兜底）
         need_cloud_tokens = []
         for task in token_tasks:
-            ck_zh = f"{source_code}_{task['lemma']}_{task['pos']}_zh"
+            ck_zh  = f"{source_code}_{task['lemma']}_{task['pos']}_zh"
             ck_aux = f"{source_code}_{task['lemma']}_{task['pos']}_aux"
-            
-            if ck_zh in app.my_dict and ck_aux in app.my_dict and "429" not in str(app.my_dict[ck_zh]):
-                task["zh_trans"] = app.my_dict[ck_zh]
+
+            # ✅ 第一优先级：硬编码兜底字典，直接赋值，跳过云端翻译
+            if task["lemma"] in HARDCODED_TRANSLATION_MAP:
+                zh_val, aux_val = HARDCODED_TRANSLATION_MAP[task["lemma"]]
+                task["zh_trans"]  = zh_val
+                task["aux_trans"] = aux_val
+            # 第二优先级：本地缓存命中
+            elif ck_zh in app.my_dict and ck_aux in app.my_dict and "429" not in str(app.my_dict[ck_zh]):
+                task["zh_trans"]  = app.my_dict[ck_zh]
                 task["aux_trans"] = app.my_dict[ck_aux]
+            # 第三优先级：需要云端翻译
             else:
                 need_cloud_tokens.append((task, ck_zh, ck_aux))
 
@@ -217,7 +235,7 @@ if parse_btn and sentence:
         full_zh = deepl_raw_translate(clean_sentence, source_lang=source_code, target_lang="ZH")
         st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
-        # 5. 安全长串序列化发送
+        # 5. 安全长串序列化发送（仅发送需要云端翻译的词）
         zh_query_elements = []
         for task, _, _ in need_cloud_tokens:
             q_zh = f"动词 {task['lemma']}" if task["pos"] == "VERB" and source_code == "de" else task["lemma"]
@@ -227,9 +245,9 @@ if parse_btn and sentence:
 
         aux_query_elements = [task["lemma"] for task, _, _ in need_cloud_tokens]
 
-        cloud_zh_results = []
+        cloud_zh_results  = []
         cloud_aux_results = []
-        
+
         if zh_query_elements:
             joined_zh_text = "Words: " + ", ".join(zh_query_elements)
             raw_zh_response = deepl_raw_translate(joined_zh_text, source_lang=source_code, target_lang="ZH")
@@ -245,31 +263,33 @@ if parse_btn and sentence:
         # 6. 数据回填
         cursor = 0
         for task, ck_zh, ck_aux in need_cloud_tokens:
-            extracted_zh = "暂无译文"
+            extracted_zh  = "暂无译文"
             extracted_aux = "Failed"
-            
+
             if cursor < len(cloud_zh_results) and cloud_zh_results[cursor]:
                 res_v = cloud_zh_results[cursor].replace("动词 ", "").replace("(动词)", "").replace("（动词）", "").strip()
-                if "429" not in res_v and "错误" not in res_v: extracted_zh = res_v
+                if "429" not in res_v and "错误" not in res_v:
+                    extracted_zh = res_v
             if cursor < len(cloud_aux_results) and cloud_aux_results[cursor]:
                 res_a = cloud_aux_results[cursor].strip()
-                if "429" not in res_a and "错误" not in res_a: extracted_aux = res_a
-                
+                if "429" not in res_a and "错误" not in res_a:
+                    extracted_aux = res_a
+
             cursor += 1
-            task["zh_trans"] = extracted_zh
+            task["zh_trans"]  = extracted_zh
             task["aux_trans"] = extracted_aux
-            
+
             if extracted_zh != "暂无译文" and extracted_aux != "Failed":
-                app.my_dict[ck_zh] = extracted_zh
+                app.my_dict[ck_zh]  = extracted_zh
                 app.my_dict[ck_aux] = extracted_aux
 
         for idiom, ck_p in need_cloud_phrases:
             extracted_p_zh = "暂无译文"
             if cursor < len(cloud_zh_results) and cloud_zh_results[cursor]:
                 res_p = cloud_zh_results[cursor].replace("短语: ", "").strip()
-                if "429" not in res_p: extracted_p_zh = res_p
+                if "429" not in res_p:
+                    extracted_p_zh = res_p
             cursor += 1
-            
             phrase_data.append({"固定搭配": idiom, "中文意思": extracted_p_zh})
             if extracted_p_zh != "暂无译文":
                 app.my_dict[ck_p] = extracted_p_zh
@@ -277,7 +297,11 @@ if parse_btn and sentence:
         # 7. 渲染输出
         verb_data, adj_adv_data, noun_data = [], [], []
         for task in token_tasks:
-            row_base = {"词原形": task["lemma"], "中文意思": task.get("zh_trans", "暂无译文"), "辅助解析": task.get("aux_trans", "Failed")}
+            row_base = {
+                "词原形":  task["lemma"],
+                "中文意思": task.get("zh_trans",  "暂无译文"),
+                "辅助解析": task.get("aux_trans", "Failed")
+            }
             if task["pos"] in ["VERB", "AUX"]:
                 verb_data.append({"经文动词": task["original_text"], **row_base})
             elif task["pos"] in ["NOUN", "PROPN"]:
@@ -288,10 +312,10 @@ if parse_btn and sentence:
         if phrase_data:
             st.subheader("🚀 固定搭配解析")
             st.table(phrase_data)
-        
+
         t1, t2, t3 = st.tabs(["动词解析", "名词解析", "形容词/副词"])
         with t1: st.table(verb_data)
         with t2: st.table(noun_data)
         with t3: st.table(adj_adv_data)
-        
+
         app.save_dict()
