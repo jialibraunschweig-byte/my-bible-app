@@ -33,14 +33,13 @@ class BibleWebApp:
 
 app = BibleWebApp()
 
-# --- 2. DeepL API 稳定一体化安全通道 ---
+# --- 2. DeepL API ---
 DEEPL_API_KEY = "b5b43291-f654-4a84-a0b1-c1d862852987:fx"
 
 def deepl_raw_translate(text, source_lang, target_lang):
-    """安全底层请求，带风控脏数据拦截"""
     if not text.strip():
         return ""
-    url = "https://api-free.deepl.com/v2/translate"
+    url = "[api-free.deepl.com](https://api-free.deepl.com/v2/translate)"
     headers = {"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"}
     data = {
         "text": [text],
@@ -89,15 +88,25 @@ ENGLISH_BASIC_VERBS = {
 
 # 🚀 德语强变化/分词/虚拟式特殊动词劫持匹配字典
 SPECIAL_VERB_LEMMA_MAP = {
-    "geschoren": "scheren",    # 💡 新增：精准纠正分词形式原形还原
+    "geschoren": "scheren",
     "herumliefe": "herumlaufen",
     "liefe": "laufen",
     "brichst": "brechen",
     "unterbricht": "unterbrechen"
 }
 
+# 🆕 德语形容词/副词强制词根还原字典（防止spaCy漏标或误标）
+SPECIAL_ADJ_LEMMA_MAP = {
+    "leichtfertig": "leichtfertig",
+    "leichtfertige": "leichtfertig",
+    "leichtfertigen": "leichtfertig",
+    "leichtfertiger": "leichtfertig",
+    "leichtfertigem": "leichtfertig",
+    "leichtfertiges": "leichtfertig",
+}
+
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：成功加入【geschoren → scheren】强变化过去分词词根校准引擎，保留合并长句免 429 交互特征。")
+st.info("💡 已升级：成功加入【leichtfertig 形容词强制还原引擎】，保留合并长句免 429 交互特征。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -113,7 +122,6 @@ with col2:
 
 if parse_btn and sentence:
     with st.spinner('安全加密通道一体化解析中...'):
-        # 0. 预处理：清洗掉可能附带的经文原始脚注干扰
         clean_sentence = re.sub(r'\[\d+\]', '', sentence)
         clean_sentence = re.sub(r'\.\[\d+\]', '.', clean_sentence)
 
@@ -134,11 +142,16 @@ if parse_btn and sentence:
                 original_text = token.text
                 original_text_clean = re.sub(r'\[\d+\]', '', original_text).strip(". ")
                 
-                # 🚀 优先触发动词强拦截劫持
                 lower_raw = original_text_clean.lower()
+
+                # 🚀 优先触发动词强拦截劫持
                 if source_code == "de" and lower_raw in SPECIAL_VERB_LEMMA_MAP:
                     lemma = SPECIAL_VERB_LEMMA_MAP[lower_raw]
-                    current_pos = "VERB" 
+                    current_pos = "VERB"
+                # 🆕 形容词/副词强制词根还原劫持（优先级次于动词）
+                elif source_code == "de" and lower_raw in SPECIAL_ADJ_LEMMA_MAP:
+                    lemma = SPECIAL_ADJ_LEMMA_MAP[lower_raw]
+                    current_pos = "ADJ"
                 else:
                     lemma = token.lemma_.lower()
                     lemma = re.sub(r'\[\d+\]', '', lemma).strip(". ")
@@ -200,7 +213,7 @@ if parse_btn and sentence:
             else:
                 need_cloud_phrases.append((idiom, ck_p))
 
-        # 4. 执行云端请求（1：整句大翻译）
+        # 4. 全句翻译
         full_zh = deepl_raw_translate(clean_sentence, source_lang=source_code, target_lang="ZH")
         st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
@@ -229,7 +242,7 @@ if parse_btn and sentence:
             raw_aux_clean = raw_aux_response.replace("Words:", "").replace("单词:", "")
             cloud_aux_results = [r.strip() for r in raw_aux_clean.replace("，", ",").split(",")]
 
-        # 6. 数据回归拆包回填与防抖核验
+        # 6. 数据回填
         cursor = 0
         for task, ck_zh, ck_aux in need_cloud_tokens:
             extracted_zh = "暂无译文"
