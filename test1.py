@@ -107,10 +107,11 @@ SPECIAL_ADJ_LEMMA_MAP = {
 
 # ✅ 硬编码译文兜底字典：key=词原形，value=(中文译文, 辅助译文)
 # 用于解决 DeepL 合并词串返回结果数量不匹配导致的 cursor 错位问题
-# 如有其他词翻译不出来，直接在此处追加即可
+# 如有其他词翻译不出来，直接在此处追加一行即可
 HARDCODED_TRANSLATION_MAP = {
     "leichtfertig": ("轻率、鲁莽、草率", "reckless / frivolous"),
     "gedankenlos":  ("不假思索、轻率、粗心", "thoughtlessly"),
+    "scheren":      ("剪、剃（头发）", "shear / cut"),
 }
 
 st.title("📖 德语经文精准解析器")
@@ -209,7 +210,7 @@ if parse_btn and sentence:
             ck_zh  = f"{source_code}_{task['lemma']}_{task['pos']}_zh"
             ck_aux = f"{source_code}_{task['lemma']}_{task['pos']}_aux"
 
-            # ✅ 第一优先级：硬编码兜底字典，直接赋值，跳过云端翻译
+            # ✅ 第一优先级：硬编码兜底字典，直接赋值，完全跳过云端翻译
             if task["lemma"] in HARDCODED_TRANSLATION_MAP:
                 zh_val, aux_val = HARDCODED_TRANSLATION_MAP[task["lemma"]]
                 task["zh_trans"]  = zh_val
