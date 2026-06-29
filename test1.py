@@ -87,8 +87,9 @@ ENGLISH_BASIC_VERBS = {
     "have", "has", "had", "having", "'ve", "do", "does", "did", "done", "will", "would"
 }
 
+# 🚀 德语强变化/分词/虚拟式特殊动词劫持匹配字典
 SPECIAL_VERB_LEMMA_MAP = {
-    "geschoren": "scheren",
+    "geschoren": "scheren",    # 💡 新增：精准纠正分词形式原形还原
     "herumliefe": "herumlaufen",
     "liefe": "laufen",
     "brichst": "brechen",
@@ -96,7 +97,7 @@ SPECIAL_VERB_LEMMA_MAP = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：改用【行标记强制对齐技术】。完美解决词条漏译（如 leichtfertig）与翻译错位问题。")
+st.info("💡 已升级：成功加入【geschoren → scheren】强变化过去分词词根校准引擎，保留合并长句免 429 交互特征。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -112,6 +113,7 @@ with col2:
 
 if parse_btn and sentence:
     with st.spinner('安全加密通道一体化解析中...'):
+        # 0. 预处理：清洗掉可能附带的经文原始脚注干扰
         clean_sentence = re.sub(r'\[\d+\]', '', sentence)
         clean_sentence = re.sub(r'\.\[\d+\]', '.', clean_sentence)
 
@@ -132,6 +134,7 @@ if parse_btn and sentence:
                 original_text = token.text
                 original_text_clean = re.sub(r'\[\d+\]', '', original_text).strip(". ")
                 
+                # 🚀 优先触发动词强拦截劫持
                 lower_raw = original_text_clean.lower()
                 if source_code == "de" and lower_raw in SPECIAL_VERB_LEMMA_MAP:
                     lemma = SPECIAL_VERB_LEMMA_MAP[lower_raw]
@@ -182,7 +185,7 @@ if parse_btn and sentence:
             ck_zh = f"{source_code}_{task['lemma']}_{task['pos']}_zh"
             ck_aux = f"{source_code}_{task['lemma']}_{task['pos']}_aux"
             
-            if ck_zh in app.my_dict and ck_aux in app.my_dict and "429" not in str(app.my_dict[ck_zh]) and "失败" not in str(app.my_dict[ck_zh]):
+            if ck_zh in app.my_dict and ck_aux in app.my_dict and "429" not in str(app.my_dict[ck_zh]):
                 task["zh_trans"] = app.my_dict[ck_zh]
                 task["aux_trans"] = app.my_dict[ck_aux]
             else:
@@ -201,73 +204,61 @@ if parse_btn and sentence:
         full_zh = deepl_raw_translate(clean_sentence, source_lang=source_code, target_lang="ZH")
         st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
-        # 5. 🚀 强约束行结构化格式组装（带序号，防止漏词或错位）
-        zh_query_lines = []
-        line_idx = 1
-        
+        # 5. 安全长串序列化发送
+        zh_query_elements = []
         for task, _, _ in need_cloud_tokens:
             q_zh = f"动词 {task['lemma']}" if task["pos"] == "VERB" and source_code == "de" else task["lemma"]
-            zh_query_lines.append(f"{line_idx}: {q_zh}")
-            line_idx += 1
-            
+            zh_query_elements.append(q_zh)
         for idiom, _ in need_cloud_phrases:
-            zh_query_lines.append(f"{line_idx}: 短语: {idiom}")
-            line_idx += 1
+            zh_query_elements.append(f"短语: {idiom}")
 
-        aux_query_lines = []
-        aux_line_idx = 1
-        for task, _, _ in need_cloud_tokens:
-            aux_query_lines.append(f"{aux_line_idx}: {task['lemma']}")
-            aux_line_idx += 1
+        aux_query_elements = [task["lemma"] for task, _, _ in need_cloud_tokens]
 
-        # 建立解析字典，用于精准匹配行号
-        cloud_zh_map = {}
-        cloud_aux_map = {}
+        cloud_zh_results = []
+        cloud_aux_results = []
         
-        if zh_query_lines:
-            joined_zh_text = "\n".join(zh_query_lines)
+        if zh_query_elements:
+            joined_zh_text = "Words: " + ", ".join(zh_query_elements)
             raw_zh_response = deepl_raw_translate(joined_zh_text, source_lang=source_code, target_lang="ZH")
-            # 按换行切分，并用正则抓取行号和译文
-            for line in raw_zh_response.split("\n"):
-                match = re.match(r"^(\d+)[:：]\s*(.*)$", line.strip())
-                if match:
-                    cloud_zh_map[int(match.group(1))] = match.group(2).strip()
+            raw_zh_clean = raw_zh_response.replace("Words:", "").replace("单词:", "").replace("词语:", "")
+            cloud_zh_results = [r.strip() for r in raw_zh_clean.replace("，", ",").split(",")]
 
-        if aux_query_lines:
-            joined_aux_text = "\n".join(aux_query_lines)
+        if aux_query_elements:
+            joined_aux_text = "Words: " + ", ".join(aux_query_elements)
             raw_aux_response = deepl_raw_translate(joined_aux_text, source_lang=source_code, target_lang=target_aux_code)
-            for line in raw_aux_response.split("\n"):
-                match = re.match(r"^(\d+)[:：]\s*(.*)$", line.strip())
-                if match:
-                    cloud_aux_map[int(match.group(1))] = match.group(2).strip()
+            raw_aux_clean = raw_aux_response.replace("Words:", "").replace("单词:", "")
+            cloud_aux_results = [r.strip() for r in raw_aux_clean.replace("，", ",").split(",")]
 
-        # 6. 数据回归拆包回填（根据强制行号 1对1 还原）
-        current_idx = 1
+        # 6. 数据回归拆包回填与防抖核验
+        cursor = 0
         for task, ck_zh, ck_aux in need_cloud_tokens:
-            # 优先从行号映射表里拿，拿不到再进行保底退化处理
-            extracted_zh = cloud_zh_map.get(current_idx, "").replace("动词 ", "").replace("(动词)", "").replace("（动词）", "").strip()
-            extracted_aux = cloud_aux_map.get(current_idx, "").strip()
+            extracted_zh = "暂无译文"
+            extracted_aux = "Failed"
             
-            # 兜底保障：如果行号没被正则切出来，防止返回空字
-            if not extracted_zh: extracted_zh = "暂无译文"
-            if not extracted_aux: extracted_aux = "Failed"
-            
-            current_idx += 1
-            
+            if cursor < len(cloud_zh_results) and cloud_zh_results[cursor]:
+                res_v = cloud_zh_results[cursor].replace("动词 ", "").replace("(动词)", "").replace("（动词）", "").strip()
+                if "429" not in res_v and "错误" not in res_v: extracted_zh = res_v
+            if cursor < len(cloud_aux_results) and cloud_aux_results[cursor]:
+                res_a = cloud_aux_results[cursor].strip()
+                if "429" not in res_a and "错误" not in res_a: extracted_aux = res_a
+                
+            cursor += 1
             task["zh_trans"] = extracted_zh
             task["aux_trans"] = extracted_aux
             
-            if extracted_zh != "暂无译文" and extracted_aux != "Failed" and "429" not in extracted_zh:
+            if extracted_zh != "暂无译文" and extracted_aux != "Failed":
                 app.my_dict[ck_zh] = extracted_zh
                 app.my_dict[ck_aux] = extracted_aux
 
         for idiom, ck_p in need_cloud_phrases:
-            extracted_p_zh = cloud_zh_map.get(current_idx, "").replace("短语: ", "").strip()
-            if not extracted_p_zh: extracted_p_zh = "暂无译文"
-            current_idx += 1
+            extracted_p_zh = "暂无译文"
+            if cursor < len(cloud_zh_results) and cloud_zh_results[cursor]:
+                res_p = cloud_zh_results[cursor].replace("短语: ", "").strip()
+                if "429" not in res_p: extracted_p_zh = res_p
+            cursor += 1
             
             phrase_data.append({"固定搭配": idiom, "中文意思": extracted_p_zh})
-            if extracted_p_zh != "暂无译文" and "429" not in extracted_p_zh:
+            if extracted_p_zh != "暂无译文":
                 app.my_dict[ck_p] = extracted_p_zh
 
         # 7. 渲染输出
