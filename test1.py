@@ -112,6 +112,7 @@ HARDCODED_TRANSLATION_MAP = {
     "leichtfertig": ("轻率、鲁莽、草率", "reckless / frivolous"),
     "gedankenlos":  ("不假思索、轻率、粗心", "thoughtlessly"),
     "scheren":      ("剪、剃（头发）", "shear / cut"),
+    "bewähren":     ("证明、经受考验、站稳脚跟", "prove oneself / stand the test"),
 }
 
 st.title("📖 德语经文精准解析器")
