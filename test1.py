@@ -111,7 +111,7 @@ HARDCODED_TRANSLATION_MAP = {
 }
 
 st.title("📖 德语经文精准解析器")
-st.info("💡 已升级：改用【多语境显性翻译指令机制】，彻底终结 geben / stammen / befähigen 等原型词被直接原词复读回显的 Bug。")
+st.info("💡 已升级：优化过滤与行边界隔离机制，修复德语名词首字母大写导致的“暂无译文”误判 Bug。")
 
 lang_option = st.radio("选择语言:", ("德语 (Deutsch)", "英语 (English)"), horizontal=True)
 source_code = "de" if "德语" in lang_option else "en"
@@ -139,13 +139,13 @@ if parse_btn and sentence:
 
         # 1. 结构清洗与提取
         for token in doc:
-            raw_text_clean = re.sub(r'\d+', '', token.text).strip("[] .")
+            raw_text_clean = re.sub(r'\d+', '', token.text).strip("[] .»«!¡?¿“”")
             if not raw_text_clean or token.is_punct or token.is_space or token.pos_ in ["PRON", "DET", "CONJ", "SCONJ", "PART", "ADP"]:
                 continue
 
             if token.pos_ in ["VERB", "AUX", "ADJ", "ADV", "NOUN", "PROPN"]:
                 original_text = token.text
-                original_text_clean = re.sub(r'\[\d+\]', '', original_text).strip(". ")
+                original_text_clean = re.sub(r'\[\d+\]', '', original_text).strip(". »«!¡?¿“”")
 
                 lower_raw = original_text_clean.lower()
 
@@ -156,8 +156,9 @@ if parse_btn and sentence:
                     lemma = SPECIAL_ADJ_LEMMA_MAP[lower_raw]
                     current_pos = "ADJ"
                 else:
+                    # 保持名词首字母大写，非名词使用小写
                     lemma = token.lemma_ if token.pos_ in ["NOUN", "PROPN"] else token.lemma_.lower()
-                    lemma = re.sub(r'\[\d+\]', '', lemma).strip(". ")
+                    lemma = re.sub(r'\[\d+\]', '', lemma).strip(". »«!¡?¿“”")
                     current_pos = token.pos_
 
                 if source_code == "de" and (lemma.lower() in GERMAN_BASIC_VERBS or lower_raw in GERMAN_BASIC_VERBS):
@@ -227,23 +228,22 @@ if parse_btn and sentence:
         full_zh = deepl_raw_translate(clean_sentence, source_lang=source_code, target_lang="ZH")
         st.success(f"**全句意译（DeepL 官方直连）：** {full_zh}")
 
-        # 5. 🚀 【引入显性翻译指令前缀】彻底规避原词直接回吐现象
+        # 5. 🚀 【边界强隔离指示前缀】使用双引号包裹被测词，杜绝引擎混淆
         zh_query_lines = []
         line_idx = 1
         for task, _, _ in need_cloud_tokens:
             pos_label = "verb" if task["pos"] == "VERB" else "word"
-            # 采用强翻译指令前缀，明确告诉DeepL将其转译为中文，不要复读
-            zh_query_lines.append(f"{line_idx}. Translate the {source_code} {pos_label} to Chinese: {task['lemma']}")
+            zh_query_lines.append(f"{line_idx}. Translate the {source_code} {pos_label} \"{task['lemma']}\" to Chinese")
             line_idx += 1
         for idiom, _ in need_cloud_phrases:
-            zh_query_lines.append(f"{line_idx}. Translate the {source_code} phrase to Chinese: {idiom}")
+            zh_query_lines.append(f"{line_idx}. Translate the {source_code} phrase \"{idiom}\" to Chinese")
             line_idx += 1
 
         aux_query_lines = []
         aux_line_idx = 1
         for task, _, _ in need_cloud_tokens:
             pos_label = "verb" if task["pos"] == "VERB" else "word"
-            aux_query_lines.append(f"{aux_line_idx}. Translate the {source_code} {pos_label} to {target_aux_code}: {task['lemma']}")
+            aux_query_lines.append(f"{aux_line_idx}. Translate the {source_code} {pos_label} \"{task['lemma']}\" to {target_aux_code}")
             aux_line_idx += 1
 
         cloud_zh_map = {}
@@ -251,7 +251,7 @@ if parse_btn and sentence:
 
         if zh_query_lines:
             joined_zh_text = "\n".join(zh_query_lines)
-            raw_zh_response = deepl_raw_translate(joined_zh_text, source_lang="en", target_lang="ZH") # 指令是英文，故源语言设为en
+            raw_zh_response = deepl_raw_translate(joined_zh_text, source_lang="en", target_lang="ZH")
             for line in raw_zh_response.split("\n"):
                 match = re.match(r"^(\d+)\.\s*(.*)$", line.strip())
                 if match:
@@ -265,25 +265,25 @@ if parse_btn and sentence:
                 if match:
                     cloud_aux_map[int(match.group(1))] = match.group(2).strip()
 
-        # 6. 数据回归拆包与彻底清洗
+        # 6. 数据回归拆包与精准防复读清洗
         current_idx = 1
         for task, ck_zh, ck_aux in need_cloud_tokens:
             extracted_zh = cloud_zh_map.get(current_idx, "").strip()
             extracted_aux = cloud_aux_map.get(current_idx, "").strip()
 
-            # 剔除由于大模型联想带出来的解释性噪音前缀
+            # 剔除常见的解释性冗余噪音前缀
             garbage_patterns = [
                 r"把.*翻译成中文[:：]\s*", r"将.*翻译成中文[:：]\s*", r"德语动词.*的意思是[:：]\s*", 
-                r"动词\s*", r"意思是[:：]\s*", r"翻译为[:：]\s*", r"词汇[:：]\s*"
+                r"动词\s*", r"意思是[:：]\s*", r"翻译为[:：]\s*", r"词汇[:：]\s*", r"\""
             ]
             for pat in garbage_patterns:
-                extracted_zh = re.sub(pat, "", extracted_zh, flags=re.IGNORECASE)
-                extracted_aux = re.sub(pat, "", extracted_aux, flags=re.IGNORECASE)
+                extracted_zh = re.sub(pat, "", extracted_zh, flags=re.IGNORECASE).strip()
+                extracted_aux = re.sub(pat, "", extracted_aux, flags=re.IGNORECASE).strip()
 
-            extracted_zh = extracted_zh.strip(' "“临”’')
-            extracted_aux = extracted_aux.strip(' " "“临”’')
+            extracted_zh = extracted_zh.strip(' "“临”’«»')
+            extracted_aux = extracted_aux.strip(' " "“临”’«»')
 
-            # 兜底：如果被大模型复读了原词，判定为翻译失败，避免污染界面
+            # 🚀 精准修复：仅当完全等同于未加工的源词原型（忽略大小写）时，才判定为“暂无译文”，放行正常名词
             if not extracted_zh or "重试" in extracted_zh or extracted_zh.lower() == task["lemma"].lower(): 
                 extracted_zh = "暂无译文"
             if not extracted_aux or "重试" in extracted_aux or extracted_aux.lower() == task["lemma"].lower(): 
@@ -298,7 +298,7 @@ if parse_btn and sentence:
                 app.my_dict[ck_aux] = extracted_aux
 
         for idiom, ck_p in need_cloud_phrases:
-            extracted_p_zh = cloud_zh_map.get(current_idx, "").strip().strip(' "“临”’')
+            extracted_p_zh = cloud_zh_map.get(current_idx, "").strip().strip(' "“临”’«»')
             if not extracted_p_zh or "重试" in extracted_p_zh: extracted_p_zh = "暂无译文"
             current_idx += 1
 
